@@ -1,8 +1,9 @@
-﻿
-namespace Editor.MeshEditor;
+﻿namespace Editor.MeshEditor;
 
 public abstract class SelectionTool : EditorTool
 {
+	public virtual void SetMoveMode( MoveMode mode ) { }
+
 	public Vector3 Pivot { get; set; }
 
 	public virtual Vector3 CalculateSelectionOrigin()
@@ -74,8 +75,15 @@ public abstract class SelectionTool<T>( MeshTool tool ) : SelectionTool where T 
 	private bool _invertSelection;
 
 	private MeshComponent _hoverMesh;
-
 	public virtual bool DrawVertices => false;
+
+	public override void SetMoveMode( MoveMode mode )
+	{
+		if ( Tool != null )
+		{
+			Tool.MoveMode = mode;
+		}
+	}
 
 	public override void Translate( Vector3 delta )
 	{
@@ -134,11 +142,13 @@ public abstract class SelectionTool<T>( MeshTool tool ) : SelectionTool where T 
 		OnMeshSelectionChanged();
 	}
 
+	public bool IsAllowedToSelect => Tool?.MoveMode?.AllowSceneSelection ?? true;
+
 	public override void OnUpdate()
 	{
 		UpdateMoveMode();
 
-		if ( Gizmo.WasLeftMouseReleased && !Gizmo.Pressed.Any && Gizmo.Pressed.CursorDelta.Length < 1 )
+		if ( IsAllowedToSelect && Gizmo.WasLeftMouseReleased && !Gizmo.Pressed.Any && Gizmo.Pressed.CursorDelta.Length < 1 )
 		{
 			Gizmo.Select();
 		}
@@ -171,7 +181,8 @@ public abstract class SelectionTool<T>( MeshTool tool ) : SelectionTool where T 
 			OnMeshSelectionChanged();
 		}
 
-		DrawSelection();
+		if ( IsAllowedToSelect )
+			DrawSelection();
 	}
 
 	void UpdateMoveMode()
@@ -438,6 +449,9 @@ public abstract class SelectionTool<T>( MeshTool tool ) : SelectionTool where T 
 
 	public void UpdateSelection( IMeshElement element )
 	{
+		if ( Tool?.MoveMode?.AllowSceneSelection == false )
+			return;
+
 		if ( Gizmo.WasLeftMousePressed )
 		{
 			if ( element.IsValid() )
