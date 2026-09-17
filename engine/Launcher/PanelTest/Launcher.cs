@@ -1,12 +1,16 @@
 ﻿using Sandbox;
 using Sandbox.UI;
 
-internal class Program
+namespace Sandbox;
+
+public static class Launcher
 {
-    private static void Main( string[] args )
+    public static int Main()
     {
         var appSystem = new PanelTestAppSystem();
-		appSystem.Run();
+        appSystem.Run();
+
+        return 0;
     }
 }
 
