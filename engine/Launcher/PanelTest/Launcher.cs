@@ -1,5 +1,6 @@
-﻿using Sandbox;
-using Sandbox.UI;
+﻿using Sandbox.UI;
+using Sandbox.UI.Construct;
+using System.Diagnostics;
 
 namespace Sandbox;
 
@@ -21,32 +22,67 @@ public class PanelTestAppSystem : PanelAppSystem
     protected override void OnInitialized()
     {
 
-        window = new Editor.PanelWindow( "Welcome to the s&box editor", new Vector2( 1100, 660 ), new Vector2( -1, -1 ), borderless: true, vsync: true );
-        window.MinSize = new Vector2( 880, 540 );
-        window.CanMaximize = false;
-        var panel = new Panel();
-        window.Root.AddChild( panel );
+		window = new Editor.PanelWindow( "Welcome to the s&box editor", new Vector2( 1100, 660 ), new Vector2( -1, -1 ), borderless: true, vsync: true );
+		window.Root.AddChild( new RootPanel() );
+    }
 
-        panel.StyleSheet.Parse( @"
+}
+
+class RootPanel : Panel
+{
+    Label fpsLabel;
+
+    public RootPanel()
+    {
+        StyleSheet.Parse( @"
             .backdrop {
                 position: absolute;
                 left: 0px;
                 top: 0px;
                 width: 100%;
                 height: 100%;
-
+                background-color: green;
                 filter: blur( 8px ) saturate( 1.1 ) brightness( 0.45 );
-	            opacity: 0;
-	            transition: opacity 1.2s ease-out;
             }
-            .backdrop.visible { opacity: 0.65; }
-        " );
 
-        panel.AddClass( "backdrop" );
+            .box {
+                width: 200px;
+                height: 200px;
+                background-color: blue;
+                filter: saturate( 1.1 );
+            }
 
-        panel.Style.Set( "background-image", $"url( https://cdn.sbox.game/upload/i/024da13a/34f6/433d/899d/15c8285f2b94/image.webp )" );
-        panel.AddClass( "visible" );
+            .inner-box {
+                width: 100px;
+                height: 100px;
+                background-color: red;
+                filter: brightness( 0.45 );
+            }
+            " );
 
+        var backdrop = AddChild<Panel>();
+        backdrop.AddClass( "backdrop" );
+
+        fpsLabel = Add.Label( "", "fps" );
+
+        var box = AddChild<Panel>();
+        box.AddClass( "box" );
+
+        var innerBox = box.AddChild<Panel>();
+        innerBox.AddClass( "inner-box" );
     }
 
+    int frameCount;
+    Stopwatch fpsTimer = Stopwatch.StartNew();
+
+    public override void Tick()
+    {
+        frameCount++;
+
+        if ( fpsTimer.ElapsedMilliseconds < 500 ) return;
+
+        fpsLabel.Text = $"{frameCount * 1000 / fpsTimer.ElapsedMilliseconds} fps";
+        frameCount = 0;
+        fpsTimer.Restart();
+    }
 }
