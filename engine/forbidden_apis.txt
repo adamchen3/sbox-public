@@ -1,0 +1,24 @@
+# Explicitly forbidden API patterns (collected from Rules/BaseAccess.cs and Compiler blacklist)
+# From AccessRules.BaseAccess (explicit negations):
+!System.Private.CoreLib/System.IO.Path.Exists(*
+!System.Private.CoreLib/System.IO.Path.GetFullPath(*
+!System.Private.CoreLib/System.IO.Path.GetTempFileName(*
+!System.Private.CoreLib/System.IO.Path.GetTempPath(*
+!System.Private.CoreLib/System.Buffers.ArrayPool.Shared*
+
+# From Compiler blacklist (Sandbox.Compiling.Compiler.Blacklist.Rules.Methods):
+System.Runtime.CompilerServices.Unsafe.*
+System.Runtime.InteropServices.MemoryMarshal.CreateReadOnlySpan*
+
+# From Compiler blacklist attributes (Sandbox.Compiling.Compiler.Blacklist.Rules.Attributes):
+System.Runtime.CompilerServices.InlineArrayAttribute*
+System.Runtime.CompilerServices.ExtensionMarkerAttribute
+System.Runtime.CompilerServices.ParamCollectionAttribute
+System.Runtime.CompilerServices.SkipLocalsInitAttribute*
+System.Runtime.CompilerServices.UnsafeAccessorAttribute*
+System.Runtime.CompilerServices.UnsafeAccessorTypeAttribute*
+System.Runtime.CompilerServices.AsyncMethodBuilderAttribute*
+
+# Notes:
+# - Any API not matched by the whitelist regexes in AccessRules may be treated as not allowed.
+# - The compiler also performs syntax-level blacklist checks (see BlacklistCodeWalker) which match fully-qualified symbols against regexes.
