@@ -40,31 +40,22 @@ class RootPanel : Panel
                 position: absolute;
                 left: 0px;
                 top: 0px;
-                width: 50%;
+                width: 100%;
                 height: 100%;
                 background-color: green;
-                filter: blur( 8px ) saturate( 1.1 ) brightness( 0.45 );
-            }
-
-            .backdrop2 {
-                position: absolute;
-                right: 0px;
-                top: 0px;
-                width: 50%;
-                height: 100%;
-                background-color: yellow;
                 // filter: blur( 8px ) saturate( 1.1 ) brightness( 0.45 );
             }
 
-            .box {
+            .outter-box {
                 position: absolute;
-                width: 200px;
-                height: 200px;
-                background-color: blue;
-                // filter: saturate( 1.1 );
+                right: 0px;
+                width: 300px;
+                height: 300px;
+                background-color: yellow;
+                filter: saturate( 1.1 );
             }
 
-            .box2 {
+            .box {
                 position: absolute;
                 right: 0px;
                 width: 200px;
@@ -75,41 +66,29 @@ class RootPanel : Panel
 
             .inner-box {
                 position: absolute;
-                width: 100px;
-                height: 100px;
-                background-color: red;
-                // filter: brightness( 0.45 );
-            }
-
-            .inner-box2 {
-                position: absolute;
                 right: 0px;
                 width: 100px;
                 height: 100px;
                 background-color: red;
-                // filter: brightness( 0.45 );
+                filter: brightness( 0.45 );
             }
             " );
 
         var backdrop = AddChild<Panel>();
         backdrop.AddClass( "backdrop" );
 
-        var backdrop2 = AddChild<Panel>();
-        backdrop2.AddClass( "backdrop2" );
 
         fpsLabel = Add.Label( "", "fps" );
+
+        var outterBox = AddChild<Panel>();
+        outterBox.AddClass( "outter-box" );
 
         var box = AddChild<Panel>();
         box.AddClass( "box" );
 
-        var box2 = AddChild<Panel>();
-        box2.AddClass( "box2" );
-
         var innerBox = AddChild<Panel>();
         innerBox.AddClass( "inner-box" );
 
-        var innerBox2 = AddChild<Panel>();
-        innerBox2.AddClass( "inner-box2" );
     }
 
     int frameCount;
