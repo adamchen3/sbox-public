@@ -26,6 +26,7 @@
     <Project Path="Launcher/SboxStandalone/Sbox-Standalone.csproj" />
     <Project Path="Launcher/Shared/LaunchShared.shproj" />
     <Project Path="Launcher/StandaloneTest/Sbox-Launcher.csproj" />
+    <Project Path="Sandbox.Demo/Sandbox.Demo.csproj" />
   </Folder>
   <Folder Name="/Engine/Tier0/">
     <Project Path="Microsoft.AspNetCore.Components/Microsoft.AspNetCore.Components.csproj" />
