@@ -25,6 +25,7 @@
     <Project Path="Launcher/SboxServer/Sbox-Server.csproj" />
     <Project Path="Launcher/SboxStandalone/Sbox-Standalone.csproj" />
     <Project Path="Launcher/Shared/LaunchShared.shproj" />
+    <Project Path="Launcher/SpriteTest/SpriteTest.csproj" />
     <Project Path="Launcher/StandaloneTest/Sbox-Launcher.csproj" />
     <Project Path="Sandbox.Demo/Sandbox.Demo.csproj" />
   </Folder>
