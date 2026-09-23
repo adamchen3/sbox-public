@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Caching.Memory;
 
 using Sandbox;
+using Sandbox.Services;
 
 public static class ApiTest
 {
@@ -14,7 +15,15 @@ public static class ApiTest
         var outputDirectory = Path.Combine( AppContext.BaseDirectory, "sections" );
         Directory.CreateDirectory( outputDirectory );
 
-        var news = await Backend.News.GetNews( 10, 0 );
+        // var news = await Backend.News.GetNews( 10, 0 );
+        // PrintNews( news );
+
+        var platformNews = await Backend.News.GetPlatformNews( 1, 0 );
+        PrintNews( platformNews );
+    }
+
+    static void PrintNews( IEnumerable<NewsPostDto> news )
+    {
         Console.WriteLine( "Fetched news:" );
         foreach ( var item in news )
         {
@@ -25,14 +34,12 @@ public static class ApiTest
             foreach ( var section in item.Sections )
             {
                 Console.WriteLine( $"  - {section.Title}" );
-                var sectionPath = Path.Combine( outputDirectory, $"{GetSafeFileName( section.Title )}.html" );
-                // await File.WriteAllTextAsync(sectionPath, section.Contents ?? string.Empty);
-                // Console.WriteLine($"  - Saved: {sectionPath}");
             }
             Console.WriteLine();
             Console.WriteLine();
         }
     }
+
     static string GetSafeFileName( string? title )
     {
         var safeTitle = string.IsNullOrWhiteSpace( title ) ? "section" : title.Trim();
