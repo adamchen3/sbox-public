@@ -1,6 +1,6 @@
 using Editor;
 using Sandbox;
-using Sandbox.Rendering;
+
 using Sandbox.UI;
 
 internal class SpriteTestAppSystem : PanelAppSystem
@@ -9,9 +9,9 @@ internal class SpriteTestAppSystem : PanelAppSystem
     protected override void OnInitialized()
     {
         base.OnInitialized();
-        window = new PanelWindow( "Sprite Test", new Vector2( 1100, 660 ), new Vector2( -1, -1 ), borderless: true );
+        window = new PanelWindow( "Sprite Test", new Vector2( 1100, 660 ), position: null, borderless: false );
         window.BackgroundColor = Color.FromBytes( 18, 20, 24 );
-        window.Root.AddChild( new SpriteTestRoot( window ) );
+        window.Root.AddChild( new TrianglePanel() );
     }
 
     sealed class SpriteTestRoot : Panel
@@ -47,34 +47,5 @@ internal class SpriteTestAppSystem : PanelAppSystem
         }
     }
 
-    sealed class TrianglePanel : Panel, IPanelDraw
-    {
-        readonly GpuBuffer<Vertex> vertexBuffer;
 
-        public TrianglePanel()
-        {
-            Style.Width = Length.Percent( 100 );
-            Style.FlexGrow = 1;
-            Style.Set( "background-color: #121418;" );
-
-            vertexBuffer = new GpuBuffer<Vertex>( 3, GpuBuffer.UsageFlags.Vertex, "SpriteTest_Triangle" );
-            vertexBuffer.SetData( new[]
-            {
-                new Vertex( new Vector3( 550, 120, 0 ), Color.Red ),
-                new Vertex( new Vector3( 300, 540, 0 ), Color.Green ),
-                new Vertex( new Vector3( 800, 540, 0 ), Color.Blue ),
-            } );
-        }
-
-        void IPanelDraw.Draw( CommandList cl )
-        {
-            cl.Draw( vertexBuffer, Material.UI.Basic );
-        }
-
-        public override void OnDeleted()
-        {
-            vertexBuffer.Dispose();
-            base.OnDeleted();
-        }
-    }
 }
