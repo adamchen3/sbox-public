@@ -40,7 +40,7 @@ public static class ApiTest
         }
     }
 
-    static string GetSafeFileName( string? title )
+    static string GetSafeFileName( string title )
     {
         var safeTitle = string.IsNullOrWhiteSpace( title ) ? "section" : title.Trim();
 
