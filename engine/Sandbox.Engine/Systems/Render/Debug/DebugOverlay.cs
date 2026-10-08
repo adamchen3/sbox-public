@@ -43,6 +43,9 @@ internal static partial class DebugOverlay
 	[ConVar( "overlay_gpu", Help = "Draws an overlay showing GPU timing for render passes" )]
 	internal static int overlay_gpu { get; set; } = 0;
 
+	[ConVar( "overlay_gpu_timeline", Help = "Draws an interactive GPU frame timeline" )]
+	internal static int overlay_gpu_timeline { get; set; } = 0;
+
 	[ConVar( "overlay_resources", Help = "Draws an overlay showing registered resources and native cache" )]
 	internal static int overlay_resources { get; set; } = 0;
 
@@ -106,8 +109,15 @@ internal static partial class DebugOverlay
 		}
 
 		// GPU Profiler
-		Diagnostics.GpuProfilerStats.Enabled = overlay_gpu == 1;
-		Diagnostics.GpuProfilerStats.Update();
+		if ( overlay_gpu_timeline == 1 )
+		{
+			DebugOverlay.GpuTimeline.Draw( painter, ref pos );
+			pos.y += OverlaySpacing;
+		}
+		else
+		{
+			DebugOverlay.GpuTimeline.Clear();
+		}
 
 		if ( overlay_gpu == 1 )
 		{
@@ -147,5 +157,8 @@ internal static partial class DebugOverlay
 
 		if ( ShadowMapper.DebugEnabled )
 			ShadowMapper.Draw( ref pos, painter );
+
+		// Tooltips float above every overlay, outside the timeline's own bounds.
+		DebugOverlay.GpuTimeline.DrawTooltip( painter );
 	}
 }

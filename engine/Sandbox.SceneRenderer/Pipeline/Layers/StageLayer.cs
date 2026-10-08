@@ -19,18 +19,26 @@ internal sealed class StageLayer : RenderLayer
 	/// </summary>
 	public bool Final { get; }
 
-	public StageLayer( Stage stage, bool color = true, bool final = false ) : base( $"Managed: {stage}" )
+	public StageLayer( Stage stage, bool color = true, bool final = false ) : base( ScopeName( stage ) )
 	{
 		Stage = stage;
 		Color = color;
 		Final = final;
 	}
 
+	internal static string ScopeName( Stage stage ) => stage switch
+	{
+		Stage.AfterViewmodel => "Managed: AfterViewModel",
+		Stage.BeforePostProcess => "Managed: BeforePostProcessing",
+		Stage.AfterPostProcess => "Managed: AfterPostProcessing",
+		_ => $"Managed: {stage}"
+	};
+
 	public override bool IsNeeded( RenderFrame frame ) => frame.Stages is not null;
 
 	// A camera's command lists and effects read what native's hook layers could: the depth chain (Depth::Get), and bloom's
-	// input (the bloom effect)
-	public override FrameResources Reads( RenderFrame frame ) => FrameResources.DepthChain | FrameResources.BloomInput;
+	// objects (the bloom effect)
+	public override FrameResources Reads( RenderFrame frame ) => FrameResources.DepthChain | FrameResources.BloomObjects;
 
 	public override void Record( RenderFrame frame, RenderContext rc, ref RenderStats stats )
 	{
@@ -47,7 +55,7 @@ internal sealed class AsyncStageLayer : RenderLayer
 {
 	public Stage Stage { get; }
 
-	public AsyncStageLayer( Stage stage ) : base( $"Managed: {stage} (async compute)" )
+	public AsyncStageLayer( Stage stage ) : base( $"{StageLayer.ScopeName( stage )} (async compute)" )
 	{
 		Stage = stage;
 	}

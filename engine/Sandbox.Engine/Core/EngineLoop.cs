@@ -192,7 +192,7 @@ internal static class EngineLoop
 		//
 		if ( !Application.IsHeadless )
 		{
-			using ( IGameInstanceDll.Current?.PushScope() )
+			using ( IGameInstanceDll.Current?.PushScope() ?? default )
 			{
 				VoiceManager.Tick();
 				Sandbox.TextRendering.Tick();
@@ -242,7 +242,7 @@ internal static class EngineLoop
 	{
 		using ( PerformanceStats.Timings.Async.Scope() )
 		{
-			using var sceneScope = IGameInstanceDll.Current?.PushScope();
+			using var sceneScope = IGameInstanceDll.Current?.PushScope() ?? default;
 
 			ThreadSafe.AssertIsMainThread();
 			MainThread.RunQueues();
@@ -333,8 +333,7 @@ internal static class EngineLoop
 		CSceneSystem.SetNextRenderTime( renderTime );
 
 		// Flush envmaps in their own view scope before we do any view rendering
-		foreach ( var scene in Scene.All.Where( x => x.Active ) )
-			scene.RenderEnvmaps();
+		Scene.RenderAllEnvmaps();
 
 		// r_managed_scene_compare renders to a bitmap, which has to happen before any views are rendering
 		Rendering.ManagedSceneRendering.BeforeRenderingViews();
