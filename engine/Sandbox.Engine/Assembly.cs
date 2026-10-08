@@ -32,6 +32,7 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo( "sbox-profiler" )]
 [assembly: InternalsVisibleTo( "benchmark" )]
 [assembly: InternalsVisibleTo( "CreateGameCache" )]
+[assembly: InternalsVisibleTo( "Sandbox.Demo" )]
 
 [assembly: TasksPersistOnContextReset]
 
