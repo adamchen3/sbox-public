@@ -1,3 +1,3 @@
-﻿await ApiTest.Run();
-
+﻿// await ApiTest.Run();
+await LoaderTest.Run();
 

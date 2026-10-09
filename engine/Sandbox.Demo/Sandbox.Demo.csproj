@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Sandbox.Services\Sandbox.Services.csproj" />
+    <ProjectReference Include="..\Sandbox.Engine\Sandbox.Engine.csproj" />
   </ItemGroup>
 
   <ItemGroup>
