@@ -1,8 +1,10 @@
 using Sandbox.Diagnostics;
 using Sandbox.Engine;
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Text.Json.Nodes;
+using Sandbox.ModelEditor.Nodes;
 
 namespace ResourceTests;
 
@@ -238,6 +240,81 @@ public class GuidTests
 	}
 
 	[TestMethod]
+	public void MaterialAttributesFollowResourceReload()
+	{
+		var engine = Environment.GetEnvironmentVariable( "FACEPUNCH_ENGINE" );
+		var path = $"{Path.GetFileName( _testPath )}/world_mapping.vmat";
+		var source = Path.Combine( _assetsPath, path );
+		void Compile( int width, int height )
+		{
+			File.WriteAllText( source, $$"""
+				"Layer0"
+				{
+					"shader" "shaders/unlit.shader"
+					"TextureColor" "[1 1 1 1]"
+					"SystemAttributes"
+					{
+						"WorldMappingWidth" "{{width}}"
+						"WorldMappingHeight" "{{height}}"
+					}
+				}
+				""" );
+			var start = new ProcessStartInfo( Path.Combine( engine, "bin", "win64", "resourcecompiler.exe" ) )
+			{
+				UseShellExecute = false,
+				CreateNoWindow = true,
+				RedirectStandardOutput = true,
+				RedirectStandardError = true
+			};
+			foreach ( var arg in new[] { "-f", "-noassert", "-skiprendersystem", "-searchpaths", $"core|{_assetsPath}", source } )
+				start.ArgumentList.Add( arg );
+			using var process = Process.Start( start );
+			var output = process.StandardOutput.ReadToEndAsync();
+			var error = process.StandardError.ReadToEndAsync();
+			if ( !process.WaitForExit( 60000 ) )
+			{
+				process.Kill( entireProcessTree: true );
+				Assert.Fail( "Material compiler timed out" );
+			}
+			Assert.AreEqual( 0, process.ExitCode, output.Result + error.Result );
+		}
+
+		Compile( 128, 64 );
+		var material = Material.Load( path );
+		Assert.IsNotNull( material );
+		var attributes = material.Attributes;
+		Assert.AreEqual( 128, attributes.GetInt( "WorldMappingWidth" ) );
+		Assert.AreEqual( 64, attributes.GetInt( "WorldMappingHeight" ) );
+		var mesh = new PolygonMesh();
+		var face = mesh.AddFace(
+			mesh.AddVertex( Vector3.Zero ),
+			mesh.AddVertex( new Vector3( 96, 0, 0 ) ),
+			mesh.AddVertex( new Vector3( 96, 96, 0 ) ),
+			mesh.AddVertex( new Vector3( 0, 96, 0 ) ) );
+		mesh.AssignMaterialToFaces( [face], material );
+		Vector2 AlignToGrid()
+		{
+			mesh.TextureAlignToGrid( Transform.Zero, face );
+			var uvs = mesh.GetFaceTextureCoords( face );
+			return new Vector2( uvs.Max( uv => uv.x ) - uvs.Min( uv => uv.x ), uvs.Max( uv => uv.y ) - uvs.Min( uv => uv.y ) );
+		}
+		Assert.IsTrue( AlignToGrid().AlmostEqual( new Vector2( 0.75f, 1.5f ) ) );
+
+		Compile( 96, 96 );
+		NativeEngine.g_pResourceSystem.ReloadResource( path );
+		Assert.AreSame( material, Material.Load( path ) );
+		Assert.AreSame( attributes, material.Attributes );
+		Assert.AreEqual( 96, attributes.GetInt( "WorldMappingWidth" ) );
+		Assert.AreEqual( 96, attributes.GetInt( "WorldMappingHeight" ) );
+		Assert.IsTrue( AlignToGrid().AlmostEqual( Vector2.One ) );
+
+		Compile( 0, 0 );
+		NativeEngine.g_pResourceSystem.ReloadResource( path );
+		Assert.AreEqual( 0, attributes.GetInt( "WorldMappingWidth" ) );
+		Assert.AreEqual( 0, attributes.GetInt( "WorldMappingHeight" ) );
+	}
+
+	[TestMethod]
 	public void NamedModelReloadsFromDisk()
 	{
 		var folder = Path.GetFileName( _testPath );
@@ -257,6 +334,38 @@ public class GuidTests
 		UnloadModel( temporary );
 		Assert.AreSame( saved, Model.Load( path ) );
 		AssertAggregateModel( saved, 3 );
+	}
+
+	[TestMethod]
+	public void BuilderGameDataSurvivesSavingAndReloading()
+	{
+		var folder = Path.GetFileName( _testPath );
+		var path = $"{folder}/model_game_data.vmdl";
+		var temporary = Model.Builder.WithName( path )
+			.AddCollisionBox( new Vector3( 8 ) )
+			.WithData( new ModelPropData { Health = 75, Explosive = true, ExplosionDamage = 80, ExplosionRadius = 256 } )
+			.WithData<ModelBreakPiece[]>( [
+				new() { PieceName = "piece", Model = "models/dev/box.vmdl", Offset = new Vector3( 1, 2, 3 ), FadeTime = 20, CollisionTags = "debris" }
+			] )
+			.Create();
+
+		File.WriteAllBytes( Path.Combine( _assetsPath, path + "_c" ), temporary.SaveToVmdl() );
+		NativeEngine.g_pResourceSystem.ReloadResource( path );
+		var saved = Model.FromNative( NativeGlue.Resources.GetModel( path, Guid.Empty ) );
+
+		Assert.IsNotNull( saved );
+		Assert.AreNotSame( temporary, saved );
+		Assert.IsFalse( saved.IsProcedural );
+		Assert.AreEqual( 75f, saved.Data.Health );
+		Assert.IsTrue( saved.Data.Explosive );
+		Assert.AreEqual( 80f, saved.Data.ExplosionDamage );
+		Assert.AreEqual( 256f, saved.Data.ExplosionRadius );
+		var piece = saved.GetData<ModelBreakPiece[]>().Single();
+		Assert.AreEqual( "piece", piece.PieceName );
+		Assert.AreEqual( "models/dev/box.vmdl", piece.Model );
+		Assert.AreEqual( new Vector3( 1, 2, 3 ), piece.Offset );
+		Assert.AreEqual( 20f, piece.FadeTime );
+		Assert.AreEqual( "debris", piece.CollisionTags );
 	}
 
 	static Model CreateAggregateModel( int drawCalls, string name = null )
