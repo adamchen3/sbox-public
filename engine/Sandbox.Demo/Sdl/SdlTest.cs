@@ -1,4 +1,5 @@
-///
+/// NOTE:
+/// 
 /// 首先第一问题是：会出现engine2.dll加载失败的问题。
 /// 如果直接写一个普通程序，不引用Sandbox.Engine，那么就能正常加载，一旦引用了，就会失败。
 /// AI给出的说法是，Sandbox.Engine引用了Sandbox.System，而Sandbox.System又引用了Sentry包，
@@ -13,8 +14,13 @@
 /// 有个疑问就是，engine2.dll的加载是给了明确的路径的，但是tier0.dll和sentry.dll的加载路径是如何确定的呢？
 /// 优先在engine2.dll所在目录下加载其依赖的dll。
 /// 
+/// 如果使用SdlWindow类去创建实例，其构建方法会判断是否在主线程内（引擎级别的标识）运行，如果不是，则会抛异常。
+/// 一种解决方法是，参考Sandbox.ApppSystem和Sandbox.Test那样，在Sandbox.System中配置一下运行Sandbox.Demo访问它的internal API，然后调用ThreadSafe.MarkMainThread方法。
+/// 另外一种方法，那就直接使用Sdl类提供的原生SDL接口来创建和管理窗口。
+/// 
 
 using NativeEngine;
+using Sandbox;
 using Sandbox.Engine;
 
 public static class SdlTest
@@ -24,30 +30,36 @@ public static class SdlTest
         var gameFolder = FindGameFolder();
         var nativeDllPath = Path.Combine( gameFolder, NetCore.NativeDllPath );
         NetCore.NativeDllPath = nativeDllPath;
-        const string baseName = "engine2";
-
-        var nativeDllName = Sandbox.Interop.GetNativeLibraryName( baseName );
-        Console.WriteLine( $"Native DLL name: {nativeDllName}" );
-
         NetCore.InitializeInterop( gameFolder );
 
-        using var window = new SdlWindow( Sdl.CreateWindow(
+        var window = Sdl.CreateWindow(
             "SDL Test Window",
             800,
             600,
-            Sdl.WindowFlags.Hidden | Sdl.WindowFlags.Resizable | Sdl.WindowFlags.Vulkan ) );
+            Sdl.WindowFlags.Hidden | Sdl.WindowFlags.Resizable | Sdl.WindowFlags.Vulkan );
 
-        window.Show();
+        if ( window == IntPtr.Zero )
+            throw new InvalidOperationException( $"Couldn't create the SDL window: {Sdl.GetError()}" );
 
-        while ( true )
+        try
         {
-            while ( Sdl.PollEvent( out var sdlEvent ) )
-            {
-                if ( sdlEvent.Type is Sdl.EventType.Quit or Sdl.EventType.WindowCloseRequested )
-                    return;
-            }
+            if ( !Sdl.ShowWindow( window ) )
+                throw new InvalidOperationException( $"Couldn't show the SDL window: {Sdl.GetError()}" );
 
-            Thread.Sleep( 16 );
+            while ( true )
+            {
+                while ( Sdl.PollEvent( out var sdlEvent ) )
+                {
+                    if ( sdlEvent.Type is Sdl.EventType.Quit or Sdl.EventType.WindowCloseRequested )
+                        return;
+                }
+
+                Thread.Sleep( 16 );
+            }
+        }
+        finally
+        {
+            Sdl.DestroyWindow( window );
         }
     }
 
