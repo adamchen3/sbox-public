@@ -15,5 +15,6 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo( "Sandbox.Menu" )]
 [assembly: InternalsVisibleTo( "Sandbox.GameInstance" )]
 [assembly: InternalsVisibleTo( "Benchmark" )]
+[assembly: InternalsVisibleTo( "Sandbox.Demo" )]
 
 

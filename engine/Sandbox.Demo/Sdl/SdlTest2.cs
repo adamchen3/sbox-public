@@ -19,32 +19,58 @@
 /// 另外一种方法，那就直接使用Sdl类提供的原生SDL接口来创建和管理窗口。
 /// 
 
+using System.Globalization;
+using Editor;
 using NativeEngine;
 using Sandbox;
 using Sandbox.Engine;
+using Sandbox.UI;
 
-public static class SdlTest2
+public class SdlTest2
 {
-    public static void Run()
-    {
-        Sandbox.SceneRenderer.EngineHooks.Install();
 
+    private PanelWindow _window;
+
+    public void Run()
+    {
+        InstallRenderers();
 
         var gameFolder = FindGameFolder();
         var nativeDllPath = Path.Combine( gameFolder, NetCore.NativeDllPath );
         NetCore.NativeDllPath = nativeDllPath;
         NetCore.InitializeInterop( gameFolder );
 
-        Application.Initialize( dedicated: false, headless: false, toolsMode: true, testMode: false, isRetail: NativeEngine.EngineGlobal.IsRetail() );
+        InitManagedMinimal();
 
-		var _appSystem = CMaterialSystem2AppSystemDict.Create( new MaterialSystem2AppSystemDictCreateInfo() );
+        // _window = new PanelWindow( "Panel Gallery", new Vector2( 1280, 860 ), null, true );
+
+        // _window.Show();
+
+        var _appSystem = CMaterialSystem2AppSystemDict.Create( new MaterialSystem2AppSystemDictCreateInfo() );
+        _appSystem.SetModGameSubdir( "core" );
+        _appSystem.SetInToolsMode();
+        _appSystem.SetSteamAppId( (uint)Sandbox.Application.AppId );
 
         if ( !NativeEngine.EngineGlobal.SourceEnginePreInit( "-nosteam -onvar -panelapp", _appSystem ) )
-		{
-			throw new Exception( "SourceEnginePreInit failed" );
-		}
+        {
+            throw new Exception( "SourceEnginePreInit failed" );
+        }
 
-        NativeEngine.EngineGlobal.Plat_SetCurrentFrame( 0 );
+        WindowInput.Initialize();
+
+        Graphics.Initialize();
+
+        if ( !NativeEngine.EngineGlobal.SourceEnginePanelAppInit( _appSystem, false ) )
+        {
+            throw new Exception( "SourceEnginePanelAppInit failed" );
+        }
+
+        FontManager.Instance.LoadAll( EngineFileSystem.CoreContent );
+
+        Material.Preload();
+        WarmRenderLayers();
+
+        // NativeEngine.EngineGlobal.Plat_SetCurrentFrame( 0 );
 
         var windowHandle = Sdl.CreateWindow(
             "SDL Test Window",
@@ -52,10 +78,14 @@ public static class SdlTest2
             600,
             Sdl.WindowFlags.Hidden | Sdl.WindowFlags.Resizable | Sdl.WindowFlags.Vulkan );
 
-        ThreadSafe.MarkMainThread();
         using var window = new SdlWindow( windowHandle );
-        // window.CreateSwapChain( "Test", RenderMultisampleType.RENDER_MULTISAMPLE_NONE, false );
+        window.CreateSwapChain( "Test", RenderMultisampleType.RENDER_MULTISAMPLE_NONE, false );
         window.Show();
+    }
+
+    protected static void InstallRenderers()
+    {
+        Sandbox.SceneRenderer.EngineHooks.Install();
     }
 
     static string FindGameFolder()
@@ -76,4 +106,64 @@ public static class SdlTest2
 
         throw new DirectoryNotFoundException( "Couldn't find game/bin/win64/engine2.dll. Run the demo from the repository or game folder." );
     }
+
+    void InitManagedMinimal()
+    {
+        Sandbox.Application.Initialize( dedicated: false, headless: false, toolsMode: true, testMode: false, isRetail: NativeEngine.EngineGlobal.IsRetail() );
+
+        DLLImportResolver.SetupResolvers();
+        Sandbox.Tasks.SyncContext.Init();
+        ThreadSafe.MarkMainThread();
+
+        // Same as Bootstrap.PreInit - the engine formats and parses in one culture everywhere,
+        // so an app that boots its own way rather than through PreInit has to say so too
+        if ( CultureInfo.CurrentCulture.Name != "en-US" )
+        {
+            var culture = CultureInfo.CreateSpecificCulture( "en-US" );
+
+            // Default* covers the thread pool as well, so work that ran off the main thread comes
+            // back with numbers the rest of the engine can read
+            CultureInfo.DefaultThreadCurrentCulture = culture;
+            CultureInfo.DefaultThreadCurrentUICulture = culture;
+            Thread.CurrentThread.CurrentCulture = culture;
+            Thread.CurrentThread.CurrentUICulture = culture;
+        }
+
+        ThreadPool.SetMinThreads( Environment.ProcessorCount, Environment.ProcessorCount );
+
+        // TaskScheduler.UnobservedTaskException += ( _, args ) => log.Error( args.Exception, "Unobserved task exception" );
+        // AppDomain.CurrentDomain.UnhandledException += ( _, args ) => log.Error( args.ExceptionObject as Exception, "AppDomain unhandled exception" );
+
+        // Diagnostics.Logging.Enabled = true;
+        // Diagnostics.Logging.OnException = ErrorReporter.ReportException;
+        EngineFileSystem.Initialize( Environment.CurrentDirectory );
+        EngineFileSystem.InitializeConfigFolder();
+        EngineFileSystem.InitializeDataFolder();
+        // Phase( "Managed filesystem" );
+
+        // The UI reads files - stylesheets, images - through the context's mount. Core has
+        // the engine styles, and this is an editor app so the editor's assets are part of it
+        Sandbox.Engine.GlobalContext.Current.FileMount = new AggregateFileSystem();
+        Sandbox.FileSystem.Mounted.CreateAndMount( EngineFileSystem.Root, "/core/" );
+        Sandbox.FileSystem.Mounted.CreateAndMount( EngineFileSystem.Root, "/addons/editor/assets/" );
+
+        // Engine controls find their [StyleSheet] attributes through the type library
+        Game.TypeLibrary = new Sandbox.Internal.TypeLibrary();
+        Game.TypeLibrary.AddIntrinsicTypes();
+        Game.TypeLibrary.AddAssembly( typeof( Vector3 ).Assembly, false );
+        Game.TypeLibrary.AddAssembly( typeof( Sandbox.UI.Panel ).Assembly, false );
+
+        Sandbox.Application.TryLoadVersionInfo( Environment.CurrentDirectory );
+
+        ErrorReporter.Initialize();
+    }
+
+    static void WarmRenderLayers()
+    {
+        Sandbox.Rendering.RenderPipeline.WarmUp();
+
+        // Native's shadow callback reads its convar mid-render, so its compute shader would be made there otherwise
+        System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor( typeof( Sandbox.Rendering.ContactShadows ).TypeHandle );
+    }
+
 }
