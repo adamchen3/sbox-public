@@ -1,4 +1,5 @@
 ﻿
+using NativeEngine;
 using Sandbox.Engine;
 using Sandbox.Rendering;
 using Sandbox.UI;
@@ -141,21 +142,6 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 	[Property]
 	public RenderTextureAsset RenderTexture;
 
-	/// <summary>
-	/// Since we are rendering to a texture, better to generate mipmaps for it.
-	/// </summary>
-	private CommandList _renderTextureMipGenCommandList;
-
-	private CommandList CreateRenderTextureMipGenCommandList()
-	{
-		var cmd = new CommandList( "Generate MipMaps For RenderTexture" );
-
-		if ( RenderTexture != null && RenderTexture.Texture != null && RenderTexture.Texture.Mips > 1 )
-			cmd.GenerateMipMaps( RenderTexture.Texture );
-
-		return cmd;
-	}
-
 	private Texture _renderTarget;
 
 	/// <summary>
@@ -227,9 +213,11 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 		sceneCamera = new( GameObject.Name );
 
 		sceneCamera.OnRenderStageHook = ExecuteCommandLists;
+		sceneCamera.OnAfterPostProcess = finalizePostProcessHook ??= FinalizePostProcessing;
 		sceneCamera.WantsDepthNormalsHook = WantsDepthNormals;
-		sceneCamera.HasAsyncComputeHook = HasAsyncCompute;
-		sceneCamera.RenderAsyncComputeHook = RenderAsyncCompute;
+		sceneCamera.HasEarlyPostProcessHook = HasEarlyPostProcess;
+		sceneCamera.ScheduleEarlyPostProcessHook = ScheduleEarlyPostProcess;
+		sceneCamera.RenderEarlyPostProcessHook = RenderEarlyPostProcess;
 	}
 
 	protected override void OnAwake()
@@ -401,9 +389,11 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 	/// Update a SceneCamera with the settings from this component
 	/// </summary>
 	Action<Stage, SceneCamera> executeCommandListsHook;
+	Action finalizePostProcessHook;
 	Func<bool> wantsDepthNormalsHook;
-	Func<Stage, bool> hasAsyncComputeHook;
-	Action<Stage> renderAsyncComputeHook;
+	Func<Stage, PostProcessQueue, bool> hasEarlyPostProcessHook;
+	Action<Stage, bool> scheduleEarlyPostProcessHook;
+	Action<Stage, PostProcessQueue> renderEarlyPostProcessHook;
 
 	public void UpdateSceneCamera( SceneCamera camera, bool includeTags = true )
 	{
@@ -477,8 +467,9 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 		//
 		camera.OnRenderStageHook = executeCommandListsHook ??= ExecuteCommandLists;
 		camera.WantsDepthNormalsHook = wantsDepthNormalsHook ??= WantsDepthNormals;
-		camera.HasAsyncComputeHook = hasAsyncComputeHook ??= HasAsyncCompute;
-		camera.RenderAsyncComputeHook = renderAsyncComputeHook ??= RenderAsyncCompute;
+		camera.HasEarlyPostProcessHook = hasEarlyPostProcessHook ??= HasEarlyPostProcess;
+		camera.ScheduleEarlyPostProcessHook = scheduleEarlyPostProcessHook ??= ScheduleEarlyPostProcess;
+		camera.RenderEarlyPostProcessHook = renderEarlyPostProcessHook ??= RenderEarlyPostProcess;
 
 		//
 		// Hack because I don't want this to have to be on a camera. This
@@ -602,6 +593,9 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 			UpdateSceneCameraUI( sceneCamera );
 			sceneCamera.RenderUI = renderUI;
 			sceneCamera.Attributes.Set( "enableEarlyUI", HasEarlyUI() );
+			// Unknown post effects and custom command lists may sample normals, so only omit them for an empty stack.
+			// Scene attributes can force the G-buffer for custom material consumers outside those stages.
+			sceneCamera.Attributes.Set( "NeedsDepthNormals", Scene.RenderAttributes.GetBool( "NeedsDepthNormals" ) || PostProcess.Layers.Count != 0 || HasCustomCommandLists() );
 			UpdateSceneCameraStereo( sceneCamera );
 		}
 	}
@@ -754,6 +748,31 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 		return sceneCamera.ToWorld( screen );
 	}
 
+	private void FinalizePostProcessing()
+	{
+		var texture = RenderTexture?.Texture;
+		if ( texture is null || !texture.IsValid || texture.Mips <= 1 )
+			return;
+
+		var currentColor = Graphics.GetColorTarget( out var owned );
+		try
+		{
+			if ( currentColor.IsNull )
+				return;
+
+			var currentColorIndex = g_pRenderDevice.GetTextureViewIndex( currentColor, 0, RenderTextureDimension.RENDER_TEXTURE_DIMENSION_2D );
+			if ( currentColorIndex != texture.Index )
+				return;
+			Graphics.ResourceBarrierTransition( texture, ResourceState.NonPixelShaderResource, 0 );
+			Graphics.GenerateMipMaps( texture );
+		}
+		finally
+		{
+			if ( owned && !currentColor.IsNull )
+				currentColor.DestroyStrongHandle();
+		}
+	}
+
 	protected override void OnEnabled()
 	{
 		Scene?.UpdateMainCamera();
@@ -761,11 +780,6 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 		AddCommandList( _hudCommandList, Rendering.Stage.AfterPostProcess, 5000 );
 		AddCommandList( _overlayCommandList, Rendering.Stage.AfterUI, 5000 );
 
-		if ( RenderTexture is not null )
-		{
-			_renderTextureMipGenCommandList = CreateRenderTextureMipGenCommandList();
-			AddCommandList( _renderTextureMipGenCommandList, Rendering.Stage.AfterPostProcess, 10000 );
-		}
 	}
 
 	protected override void OnDisabled()
@@ -775,11 +789,6 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 		RemoveCommandList( _hudCommandList );
 		RemoveCommandList( _overlayCommandList );
 
-		if ( _renderTextureMipGenCommandList is not null )
-		{
-			RemoveCommandList( _renderTextureMipGenCommandList );
-			_renderTextureMipGenCommandList = null;
-		}
 	}
 
 	/// <summary>
@@ -816,8 +825,41 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 	/// </summary>
 	public bool RenderToTexture( Texture target, in ViewSetup config = default )
 	{
+		return RenderToTexture( target, null, config );
+	}
+
+	/// <summary>
+	/// Render colour and depth into caller-owned textures without copying the depth buffer.
+	/// The optional depth target must be a renderable 2D depth texture with eight stencil bits and the same dimensions
+	/// as the colour target. Its sample count determines the scene's MSAA sample count.
+	/// Depth retains the camera's projection and orientation: <see cref="ViewSetup.FlipX"/> and
+	/// <see cref="ViewSetup.FlipY"/> only affect the final colour blit. Keep both textures alive
+	/// until rendering and any subsequent sampling have completed.
+	/// </summary>
+	public bool RenderToTexture( Texture target, Texture depthTarget, in ViewSetup config )
+	{
+		return RenderToTexture( target, depthTarget, config, out _ );
+	}
+
+	/// <summary>
+	/// Submit a camera view and copy its resolved projection and viewport for deferred consumers.
+	/// </summary>
+	internal bool RenderToTexture( Texture target, Texture depthTarget, in ViewSetup config, out ViewData viewData )
+	{
+		viewData = default;
+
 		if ( target is null || target.native.IsNull )
 			return false;
+
+		if ( depthTarget is not null )
+		{
+			if ( !depthTarget.IsValid || depthTarget.IsError || !depthTarget.IsRenderTarget
+				|| !depthTarget.ImageFormat.HasCameraStencil() || depthTarget.Depth != 1 )
+				throw new ArgumentException( "Depth must be a valid 2D depth render target with eight stencil bits.", nameof( depthTarget ) );
+
+			if ( depthTarget.Size != target.Size )
+				throw new ArgumentException( "Colour and depth targets must have matching dimensions.", nameof( depthTarget ) );
+		}
 
 		// TODO: we need to get rid of this guard, it's a hack
 		if ( !Graphics.IsActive )
@@ -840,11 +882,26 @@ public sealed partial class CameraComponent : Component, Component.ExecuteInEdit
 		//
 		// Adds the views to the scene system
 		//
-		setup.Native.RenderToTexture( target.native, Graphics.SceneView );
+		var rendered = setup.Native.RenderToTexture( target.native, Graphics.SceneView, depthTarget?.native ?? default );
+
+		if ( rendered )
+		{
+			var depthRange = setup.Native.RenderedDepthRange;
+			viewData = new ViewData
+			{
+				IsValid = true,
+				ProjectionToView = setup.Native.RenderedProjectionToView,
+				Viewport = setup.Native.RenderedViewport,
+				DepthRange = new Vector2( depthRange.x, depthRange.y ),
+				DepthUvScaleBias = new Vector4(
+					setup.Native.FlipX ? -1 : 1, setup.Native.FlipY ? -1 : 1,
+					setup.Native.FlipX ? 1 : 0, setup.Native.FlipY ? 1 : 0 )
+			};
+		}
+
 		setup.Native.ClearSceneWorlds();
 
-
-		return true;
+		return rendered;
 	}
 
 	/// <summary>
