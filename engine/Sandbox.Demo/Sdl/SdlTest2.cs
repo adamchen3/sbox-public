@@ -29,9 +29,35 @@ using Sandbox.UI;
 public class SdlTest2
 {
 
-    private PanelWindow _window;
+    private SdlWindow _window;
+
+    private CMaterialSystem2AppSystemDict _appSystem;
 
     public void Run()
+    {
+        Initialize();
+
+        var windowHandle = Sdl.CreateWindow(
+            "SDL Test Window",
+            800,
+            600,
+            Sdl.WindowFlags.Hidden | Sdl.WindowFlags.Resizable | Sdl.WindowFlags.Vulkan );
+
+        _window = new SdlWindow( windowHandle );
+        _window.CreateSwapChain( "Test", RenderMultisampleType.RENDER_MULTISAMPLE_NONE, false );
+        _window.Show();
+
+        while ( RunFrame() ) ;
+    }
+
+    protected virtual bool RunFrame()
+    {
+        SdlEvents.Poll();
+		NativeEngine.EngineGlobal.SourceEnginePanelAppFrame();
+        return !Sandbox.Application.WantsExit;
+    }
+
+    protected void Initialize()
     {
         InstallRenderers();
 
@@ -40,18 +66,25 @@ public class SdlTest2
         NetCore.NativeDllPath = nativeDllPath;
         NetCore.InitializeInterop( gameFolder );
 
+        if ( OperatingSystem.IsWindows() )
+        {
+            var path = System.Environment.GetEnvironmentVariable( "PATH" );
+            path = $"{nativeDllPath};{path}";
+            System.Environment.SetEnvironmentVariable( "PATH", path );
+        }
+
         InitManagedMinimal();
 
         // _window = new PanelWindow( "Panel Gallery", new Vector2( 1280, 860 ), null, true );
 
         // _window.Show();
 
-        var _appSystem = CMaterialSystem2AppSystemDict.Create( new MaterialSystem2AppSystemDictCreateInfo() );
+        _appSystem = CMaterialSystem2AppSystemDict.Create( new MaterialSystem2AppSystemDictCreateInfo() );
         _appSystem.SetModGameSubdir( "core" );
         _appSystem.SetInToolsMode();
         _appSystem.SetSteamAppId( (uint)Sandbox.Application.AppId );
 
-        if ( !NativeEngine.EngineGlobal.SourceEnginePreInit( "-nosteam -onvar -panelapp", _appSystem ) )
+        if ( !NativeEngine.EngineGlobal.SourceEnginePreInit( "", _appSystem ) )
         {
             throw new Exception( "SourceEnginePreInit failed" );
         }
@@ -71,16 +104,6 @@ public class SdlTest2
         WarmRenderLayers();
 
         // NativeEngine.EngineGlobal.Plat_SetCurrentFrame( 0 );
-
-        var windowHandle = Sdl.CreateWindow(
-            "SDL Test Window",
-            800,
-            600,
-            Sdl.WindowFlags.Hidden | Sdl.WindowFlags.Resizable | Sdl.WindowFlags.Vulkan );
-
-        using var window = new SdlWindow( windowHandle );
-        window.CreateSwapChain( "Test", RenderMultisampleType.RENDER_MULTISAMPLE_NONE, false );
-        window.Show();
     }
 
     protected static void InstallRenderers()
