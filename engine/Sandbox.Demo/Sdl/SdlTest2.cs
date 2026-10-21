@@ -75,16 +75,12 @@ public class SdlTest2
 
         InitManagedMinimal();
 
-        // _window = new PanelWindow( "Panel Gallery", new Vector2( 1280, 860 ), null, true );
-
-        // _window.Show();
-
         _appSystem = CMaterialSystem2AppSystemDict.Create( new MaterialSystem2AppSystemDictCreateInfo() );
         _appSystem.SetModGameSubdir( "core" );
         _appSystem.SetInToolsMode();
         _appSystem.SetSteamAppId( (uint)Sandbox.Application.AppId );
 
-        if ( !NativeEngine.EngineGlobal.SourceEnginePreInit( "", _appSystem ) )
+        if ( !NativeEngine.EngineGlobal.SourceEnginePreInit( "-nosteam -novr -panelapp", _appSystem ) )
         {
             throw new Exception( "SourceEnginePreInit failed" );
         }

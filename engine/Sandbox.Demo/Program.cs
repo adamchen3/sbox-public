@@ -4,5 +4,7 @@
 
 // await ApiTest.Run();
 // await LoaderTest.Run();
-new SdlTest2().Run();
+// SdlTest.Run();
+// new SdlTest2().Run();
+new SdlTest3().Run();
 
