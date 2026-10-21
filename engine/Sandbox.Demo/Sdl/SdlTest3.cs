@@ -24,6 +24,7 @@ using Editor;
 using NativeEngine;
 using Sandbox;
 using Sandbox.Engine;
+using Sandbox.Rendering;
 using Sandbox.UI;
 
 public class SdlTest3
@@ -32,6 +33,9 @@ public class SdlTest3
     private SdlWindow _window;
 
     private CMaterialSystem2AppSystemDict _appSystem;
+
+    private GpuBuffer<Vertex> _triangleVertexBuffer;
+    private Vector2 _triangleVertexBufferSize;
 
     public void Run()
     {
@@ -45,13 +49,12 @@ public class SdlTest3
 
         _window = new SdlWindow( windowHandle );
         _window.CreateSwapChain( "Test", RenderMultisampleType.RENDER_MULTISAMPLE_NONE, false );
-
-        // TODO: Draw a triangle
-
         _window.Show();
 
         while ( RunFrame() ) ;
 
+        _triangleVertexBuffer?.Dispose();
+        _window.Dispose();
         NativeEngine.EngineGlobal.SourceEngineShutdown( _appSystem, false );
 
         if ( _appSystem.IsValid )
@@ -71,7 +74,117 @@ public class SdlTest3
                 return false;
         }
         NativeEngine.EngineGlobal.SourceEnginePanelAppFrame();
+        DrawTriangleWithVertexBuffer();
         return !Sandbox.Application.WantsExit;
+    }
+
+    void DrawTriangleWithVertexBuffer() => DrawTriangle( useVertexBuffer: true );
+
+    void DrawTriangleWithPainter() => DrawTriangle( useVertexBuffer: false );
+
+    void DrawTriangle( bool useVertexBuffer )
+    {
+        if ( !_window.UpdateSwapChain() )
+            return;
+
+        var swapChain = _window.SwapChain;
+        var size = _window.SwapChainSize;
+        var color = g_pRenderDevice.GetSwapChainTexture( swapChain, SwapChainBuffer.BufferColor );
+        var depth = g_pRenderDevice.GetSwapChainTexture( swapChain, SwapChainBuffer.BufferDepth );
+
+        try
+        {
+            if ( color.IsNull || depth.IsNull )
+                throw new InvalidOperationException( "Couldn't get the SDL swap chain's color and depth textures" );
+
+            var context = g_pRenderDevice.CreateRenderContext( 0 );
+            try
+            {
+                context.GetAttributesPtrForModify().SetGlobalBindlessDescriptorSet();
+
+                using var view = new Graphics.ManagedView
+                {
+                    Color = color,
+                    Depth = depth,
+                    Viewport = new Rect( 0, 0, size.x, size.y ),
+                    ColorFormat = ImageFormat.RGBA8888
+                };
+
+                using ( new Graphics.Scope( context, view ) )
+                {
+                    Graphics.Clear( new Color( 0.08f, 0.08f, 0.1f ) );
+                    if ( useVertexBuffer )
+                    {
+                        DrawVertexBufferTriangle( size );
+                    }
+                    else
+                    {
+                        DrawPainterTriangle( size );
+                    }
+                }
+
+                g_pRenderDevice.BeginSubmittingDisplayLists( swapChain );
+                context.Submit();
+                if ( !_window.Present() )
+                    throw new InvalidOperationException( "Couldn't present the SDL swap chain" );
+            }
+            finally
+            {
+                g_pRenderDevice.ReleaseRenderContext( context );
+            }
+        }
+        finally
+        {
+            if ( !color.IsNull ) color.DestroyStrongHandle();
+            if ( !depth.IsNull ) depth.DestroyStrongHandle();
+        }
+    }
+
+    void DrawVertexBufferTriangle( Vector2 size )
+    {
+        _triangleVertexBuffer ??= new GpuBuffer<Vertex>( 3, GpuBuffer.UsageFlags.Vertex, "SdlTest3_Triangle" );
+
+        if ( _triangleVertexBufferSize != size )
+        {
+            var center = size * 0.5f;
+            var radius = MathF.Min( size.x, size.y ) * 0.25f;
+            _triangleVertexBuffer.SetData( new[]
+            {
+                new Vertex( new Vector3( center.x, center.y - radius, 0 ), Color.Red ),
+                new Vertex( new Vector3( center.x - radius, center.y + radius, 0 ), Color.Green ),
+                new Vertex( new Vector3( center.x + radius, center.y + radius, 0 ), Color.Blue )
+            } );
+            _triangleVertexBufferSize = size;
+        }
+
+        Graphics.Attributes.Set( "TransformMat", Matrix.Identity );
+        Graphics.Attributes.Set( "LayerMat", Matrix.Identity );
+        Graphics.Attributes.SetCombo( "D_WORLDPANEL", 0 );
+        Graphics.Draw( _triangleVertexBuffer, Material.UI.Basic );
+    }
+
+    static void DrawPainterTriangle( Vector2 size )
+    {
+        var commands = new CommandList( "SDL triangle" );
+        try
+        {
+            using ( var painter = Painter.Begin( commands, new Rect( 0, 0, size.x, size.y ) ) )
+            {
+                painter.Fill = Color.Cyan;
+                var center = size * 0.5f;
+                var radius = MathF.Min( size.x, size.y ) * 0.25f;
+                painter.Triangle(
+                    new Vector2( center.x, center.y - radius ),
+                    new Vector2( center.x - radius, center.y + radius ),
+                    new Vector2( center.x + radius, center.y + radius ) );
+            }
+
+            commands.Execute();
+        }
+        finally
+        {
+            commands.Reset();
+        }
     }
 
     protected void Initialize()
