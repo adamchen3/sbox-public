@@ -6,5 +6,6 @@
 // await LoaderTest.Run();
 // SdlTest.Run();
 // new SdlTest2().Run();
-new SdlTest3().Run();
+// new SdlTest3().Run();
+new SdlTest4().Run();
 

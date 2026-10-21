@@ -465,3 +465,62 @@ Collect → Prepare → Setup → Record → Submit
 > Buffer 存顶点；Layout 解释顶点；Shader 决定计算；Material 选择和配置 Shader；Attributes 提供参数；Context 记录操作；Render Target 接收像素；Submit 提交工作；SwapChain/Present 负责窗口呈现。
 
 Graphics、Scope 和 ManagedView 则让这些操作方便地接入 s&box 已有的托管绘制体系。
+
+## 13. 不初始化 Graphics：SdlTest4 原生路径
+
+[SdlTest4](Sdl/SdlTest4.cs) 验证了另一条路径：在当前环境中，执行原生 `SourceEnginePreInit` 后，可以直接使用设备和原生材质系统绘制，不需要 `Graphics.Initialize`、Graphics.Scope、ManagedView、Painter，也不需要 `SourceEnginePanelAppInit`。
+
+这不意味着只创建 SwapChain 和 context 就能自动绘图。仍需准备顶点、布局及 Shader 状态，只是不通过托管 Graphics 封装：
+
+```text
+SourceEnginePreInit
+    → RenderDevice.CreateSwapChain
+    → 原生 VertexLayout.Create / Add / Build
+    → RenderDevice.CreateGPUBuffer
+    → MaterialSystem2.CreateRawMaterial
+    → RenderTools.SetGPUBufferData（显式传入上传 context）
+    → 上传 context.Submit，等待上传完成并释放该 context
+
+每帧：
+    RenderDevice.CreateRenderContext
+    → context.BindRenderTargets(swapChain, true, false)
+    → context.SetViewport / Clear
+    → RenderTools.SetRenderState(context, attributes, materialMode, layout, ...)
+    → context.BindVertexBuffer
+    → context.Draw(Triangles, 0, 3)
+    → RenderDevice.BeginSubmittingDisplayLists
+    → context.Submit
+    → RenderDevice.ReleaseRenderContext
+    → RenderDevice.Present
+```
+
+这里仍使用原生 Material 和 RenderTools，因为现有托管接口没有完整暴露独立的图形管线创建 API。它们不要求调用托管的 Material 包装类或 Graphics 门面。
+
+示例使用独立的 [sdl_triangle.shader](../../game/core/shaders/sdl_triangle.shader)：
+
+- 每个顶点是两个 float3：裁剪空间位置和 RGB 颜色，共 24 字节。
+- VS 直接输出 `float4(position, 1)`，不需要相机和 UI 变换。
+- PS 输出插值颜色，不读取纹理或全局 bindless 资源表。
+- Shader 关闭深度测试、深度写入、混合和背面剔除，只绑定颜色目标。
+- 颜色写入当前 SwapChain 时会进行 sRGB 编码；Shader 中的线性 RGB 不等于回读的 8 位 RGB。
+
+从仓库根目录使用 PowerShell 编译和运行：
+
+```powershell
+dotnet build engine\Sandbox.Demo\Sandbox.Demo.csproj --no-restore
+Set-Location game
+& .\bin\managed\ShaderCompiler.exe (Join-Path (Get-Location) 'core\shaders\sdl_triangle.shader')
+& ..\engine\Sandbox.Demo\bin\Debug\net10.0\Sandbox.Demo.exe
+```
+
+上述运行命令以入口选择 SdlTest4 为前提。ShaderCompiler 需要已构建；编译产生的 `.shader_c` 属于忽略的生成文件，新工作区需要先编译该 Shader。
+
+可以增加 `--verify-triangle` 参数执行一次 GPU 回读验证后退出：
+
+```powershell
+& ..\engine\Sandbox.Demo\bin\Debug\net10.0\Sandbox.Demo.exe --verify-triangle
+```
+
+验证会比较三角形中心和背景的颜色，不只是检查进程是否存活。当前 800 × 600 窗口实测中心 RGB 为 `(187, 137, 138)`，背景为 `(80, 80, 89)`，符合 sRGB 编码后的预期；连续 Present、窗口缩放和关闭退出也已验证通过。
+
+退出时先完成 GPU 工作，再释放材质句柄、Buffer、布局和 SwapChain，最后销毁窗口并关闭原生引擎，避免图形资源跨越设备生命周期。
