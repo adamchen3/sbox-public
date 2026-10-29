@@ -1,4 +1,5 @@
-﻿// Console.WriteLine($"AppContent Base Directory: {AppContext.BaseDirectory}");
+﻿using Sandbox.Demo;
+// Console.WriteLine($"AppContent Base Directory: {AppContext.BaseDirectory}");
 // Console.WriteLine($"Environment Current Directory: {Environment.CurrentDirectory}");
 // Console.WriteLine($"Environment Process Path: {Environment.ProcessPath}");
 
@@ -7,5 +8,6 @@
 // SdlTest.Run();
 // new SdlTest2().Run();
 // new SdlTest3().Run();
-new SdlTest4().Run();
+// new SdlTest4().Run();
 
+SceneResourceDecompiler.Decompile( args[0] );
