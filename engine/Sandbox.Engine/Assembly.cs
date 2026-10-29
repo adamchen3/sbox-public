@@ -34,6 +34,7 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo( "benchmark" )]
 [assembly: InternalsVisibleTo( "CreateGameCache" )]
 [assembly: InternalsVisibleTo( "Sandbox.Demo" )]
+[assembly: InternalsVisibleTo( "Sandbox.ResourceDecompiler" )]
 
 [assembly: TasksPersistOnContextReset]
 
