@@ -85,7 +85,7 @@ public partial class RenderSettings
 		var cores = SystemInfo.ProcessorCount;
 
 		// Integrated parts report the shared system heap as video memory, so VRAM says nothing.
-		if ( IsIntegratedGpu( SystemInfo.Gpu ) )
+		if ( SystemInfo.GpuIntegrated )
 			return GraphicsPreset.Low;
 
 		if ( vram >= Class( 12, GB ) && ram >= 16 * GB && cores >= 12 )
@@ -106,19 +106,6 @@ public partial class RenderSettings
 	/// </summary>
 	static ulong Class( ulong gigabytes, ulong gb ) => gigabytes * gb - (gb * 3 / 4);
 
-	internal static bool IsIntegratedGpu( string name )
-	{
-		if ( string.IsNullOrEmpty( name ) )
-			return false;
-
-		// Discrete Intel is Arc; AMD's integrated parts have no model number after "Radeon".
-		if ( name.Contains( "Intel", StringComparison.OrdinalIgnoreCase ) && !name.Contains( "Arc", StringComparison.OrdinalIgnoreCase ) )
-			return true;
-
-		return name.Contains( "Radeon(TM) Graphics", StringComparison.OrdinalIgnoreCase )
-			|| name.Contains( "Vega", StringComparison.OrdinalIgnoreCase );
-	}
-
 	/// <summary>
 	/// Pick for the user on first launch. Runs once and leaves a marker; after that the stored
 	/// settings are theirs.
@@ -133,9 +120,13 @@ public partial class RenderSettings
 		var preset = DetectPreset();
 		ApplyPreset( preset );
 
-		Apply();
+		// Not Apply(): the window was created from the command line, and switching it to the saved
+		// mode here would drop -sw/-w/-h (e.g. windowed local instances going borderless).
+		ApplyVideoMode( honourCommandLine: true );
+		OnVideoSettingsChanged?.Invoke();
+		VideoSettings.Save();
 
-		log.Info( $"Detected graphics preset: {preset} (gpu: {SystemInfo.Gpu}, vram: {SystemInfo.GpuMemory / (1024 * 1024)}MB, cores: {SystemInfo.ProcessorCount}, ram: {SystemInfo.TotalMemory / (1024 * 1024)}MB)" );
+		log.Info( $"Detected graphics preset: {preset} (gpu: {SystemInfo.Gpu}, vram: {SystemInfo.GpuMemory / (1024 * 1024)}MB, integrated: {SystemInfo.GpuIntegrated}, cores: {SystemInfo.ProcessorCount}, ram: {SystemInfo.TotalMemory / (1024 * 1024)}MB)" );
 	}
 
 	const string AutoDetectedKey = "quality.autodetected";

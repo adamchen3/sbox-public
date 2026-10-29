@@ -516,6 +516,13 @@ public abstract partial class Connection : BytePack.ISerializer
 	internal ConnectionInfo PreInfo { get; set; }
 
 	/// <summary>
+	/// Last <see cref="DisplayName"/> source and its filtered result. Steam's text filter is a native call,
+	/// and UI like nameplates and scoreboards reads the display name of every player every frame.
+	/// </summary>
+	sealed record FilteredName( string Source, ulong SteamId, string Value );
+	FilteredName _filteredName;
+
+	/// <summary>
 	/// The player's name but with any potential nicknames or naughty words filtered out.
 	/// You don't want to be using this in serverside logic really.
 	/// </summary>
@@ -525,19 +532,55 @@ public abstract partial class Connection : BytePack.ISerializer
 	{
 		get
 		{
+			string source = null;
 			if ( Steamworks.SteamFriends.IsInstalled )
 			{
 				var personaName = FriendInfo.DisplayName;
 				if ( !string.IsNullOrWhiteSpace( personaName ) )
-					return Utility.Steam.FilterName( personaName, SteamId );
+					source = personaName;
 			}
 
-			return Utility.Steam.FilterName( Name, SteamId );
+			source ??= Name;
+			var steamId = SteamId;
+
+			// Filter again only when the name or account changes
+			var cached = _filteredName;
+			if ( cached is not null && cached.SteamId == steamId.ValueUnsigned && string.Equals( cached.Source, source, StringComparison.Ordinal ) )
+				return cached.Value;
+
+			var filtered = Utility.Steam.FilterName( source, steamId );
+			_filteredName = new FilteredName( source, steamId.ValueUnsigned, filtered );
+			return filtered;
 		}
 	}
 
+	/// <summary>
+	/// The Steam Id of this connection. For a dedicated server this is the game server's Steam Id.
+	/// Clients get the host's Steam Id from the host itself, so it isn't verified on IP connections.
+	/// </summary>
 	[ActionGraphInclude]
-	public SteamId SteamId => Info?.SteamId ?? default;
+	public SteamId SteamId => Info?.SteamId ?? FallbackSteamId;
+
+	/// <summary>
+	/// The Steam Id the host sent us in its <see cref="ServerInfo"/>. Dedicated servers have no
+	/// <see cref="ConnectionInfo"/>, so this is the only place clients get their Steam Id from.
+	/// </summary>
+	internal SteamId HostSteamId { get; set; }
+
+	SteamId FallbackSteamId
+	{
+		get
+		{
+			if ( this is LocalConnection && Application.IsDedicatedServer )
+			{
+				// Still the uninitialized default until the game server has logged on
+				var steamId = Utility.Steam.SteamId;
+				return steamId.AccountType == SteamId.AccountTypes.Invalid ? default : steamId;
+			}
+
+			return HostSteamId;
+		}
+	}
 
 	/// <summary>
 	/// Steam friend information for this connection.
