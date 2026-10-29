@@ -1,9 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
-using ValveResourceFormat;
-using ValveResourceFormat.CompiledShader;
-using ValveResourceFormat.ResourceTypes;
 
 namespace Sandbox.ResourceDecompiler.Tests;
 
@@ -155,13 +152,78 @@ public sealed class DecompilerTests
 	}
 
 	[TestMethod]
-	public void CompatibilityLayerPreservesExtensionBlockIndices()
+	public void UnsupportedSnapshotDataDoesNotProducePlaceholder()
 	{
-		var path = Path.Combine( root, "test.custom_c" );
+		var path = Path.Combine( root, "test.vsnap_c" );
 		File.WriteAllBytes( path, Container( 1, ("GUID", new byte[16]), ("DATA", [1, 2, 3, 4]) ) );
-		using var resource = ResourceFileLoader.ReadResource( path );
-		Assert.AreEqual( 2, resource.Blocks.Count );
-		Assert.AreEqual( BlockType.DATA, resource.Blocks[1].Type );
+		var result = Scan();
+		Assert.AreEqual( 1, result.Code );
+		Assert.IsTrue( result.Error.Contains( "KV3 version 2", StringComparison.Ordinal ) );
+		Assert.IsFalse( File.Exists( path[..^2] ) );
+		Assert.IsTrue( result.Error.Contains( "[PARTIAL]", StringComparison.Ordinal ) );
+		Assert.IsFalse( File.Exists( path[..^2] + ".runtime.json" ) );
+		CollectionAssert.AreEqual( new byte[] { 1, 2, 3, 4 }, File.ReadAllBytes( Path.Combine( path[..^2] + ".recovered.blocks", "DATA.0.bin" ) ) );
+	}
+
+	[TestMethod]
+	public void UnsupportedMaterialKv3VersionDoesNotPublishSourceOrMetadata()
+	{
+		var path = Path.Combine( root, "test.vmat_c" );
+		var data = new byte[64];
+		BinaryPrimitives.WriteUInt32LittleEndian( data, 0x4b563305 );
+		File.WriteAllBytes( path, Container( 1, ("GUID", new byte[16]), ("DATA", data) ) );
+		var result = Scan();
+		Assert.AreEqual( 1, result.Code );
+		Assert.IsTrue( result.Error.Contains( "KV3 version 2", StringComparison.Ordinal ) );
+		Assert.IsFalse( File.Exists( path[..^2] ) );
+		Assert.IsFalse( File.Exists( path[..^2] + ".meta" ) );
+		Assert.IsFalse( File.Exists( path[..^2] + ".runtime.json" ) );
+	}
+
+	[DataTestMethod]
+	[DataRow( "vpcf" )]
+	[DataRow( "vpost" )]
+	[DataRow( "vsnap" )]
+	[DataRow( "vmdl" )]
+	public void RuntimeOnlyFormatsSalvageDataWithoutInventingAuthoringSource( string extension )
+	{
+		var path = Path.Combine( root, $"test.{extension}_c" );
+		var data = BinaryKv3Tests.Fixture( 1 );
+		var original = Container( 1, ("DATA", data), ("ANIM", [1, 2]), ("ANIM", [3, 4]), ("PHYS", [5, 6]) )
+			.Concat( new byte[] { 7, 8, 9 } ).ToArray();
+		File.WriteAllBytes( path, original );
+		var result = Scan();
+		Assert.AreEqual( 1, result.Code );
+		Assert.IsTrue( result.Error.Contains( "[PARTIAL]", StringComparison.Ordinal ) );
+		Assert.IsFalse( File.Exists( path[..^2] ) );
+		Assert.IsFalse( File.Exists( path[..^2] + ".meta" ) );
+		Assert.IsTrue( File.ReadAllText( path[..^2] + ".runtime.json" ).Contains( "value.vtex", StringComparison.Ordinal ) );
+		var blocks = path[..^2] + ".recovered.blocks";
+		CollectionAssert.AreEqual( data, File.ReadAllBytes( Path.Combine( blocks, "DATA.0.bin" ) ) );
+		CollectionAssert.AreEqual( new byte[] { 1, 2 }, File.ReadAllBytes( Path.Combine( blocks, "ANIM.0.bin" ) ) );
+		CollectionAssert.AreEqual( new byte[] { 3, 4 }, File.ReadAllBytes( Path.Combine( blocks, "ANIM.1.bin" ) ) );
+		CollectionAssert.AreEqual( new byte[] { 5, 6 }, File.ReadAllBytes( Path.Combine( blocks, "PHYS.0.bin" ) ) );
+		CollectionAssert.AreEqual( new byte[] { 7, 8, 9 }, File.ReadAllBytes( Path.Combine( blocks, "stream.bin" ) ) );
+		CollectionAssert.AreEqual( original, File.ReadAllBytes( path ) );
+		Assert.AreEqual( 1, Scan().Code );
+		Assert.AreEqual( 0, Directory.GetFiles( root, "*.decompile-tmp" ).Length );
+	}
+
+	[TestMethod]
+	public void ConflictingRuntimeReferenceDoesNotPublishJsonOrOtherBlocks()
+	{
+		var path = Path.Combine( root, "test.vpcf_c" );
+		File.WriteAllBytes( path, Container( 1, ("DATA", BinaryKv3Tests.Fixture( 1 )), ("ANIM", [1, 2]) ) );
+		var blocks = path[..^2] + ".recovered.blocks";
+		Directory.CreateDirectory( blocks );
+		var existing = Path.Combine( blocks, "ANIM.0.bin" );
+		File.WriteAllBytes( existing, [5, 6] );
+		var result = Scan();
+		Assert.AreEqual( 1, result.Code );
+		Assert.IsTrue( result.Error.Contains( "[FAILED]", StringComparison.Ordinal ) );
+		Assert.IsFalse( File.Exists( path[..^2] + ".runtime.json" ) );
+		Assert.IsFalse( File.Exists( Path.Combine( blocks, "DATA.0.bin" ) ) );
+		CollectionAssert.AreEqual( new byte[] { 5, 6 }, File.ReadAllBytes( existing ) );
 	}
 
 	[TestMethod]
@@ -215,41 +277,6 @@ public sealed class DecompilerTests
 		Assert.IsFalse( File.Exists( primary ) );
 		CollectionAssert.AreEqual( new byte[] { 9 }, File.ReadAllBytes( dependency ) );
 		Assert.AreEqual( 0, Directory.GetFiles( root, "*.decompile-tmp" ).Length );
-	}
-
-	[TestMethod]
-	public void MaterialRmaMapsToAuthoringInputsNotTextureRma()
-	{
-		using var resource = new Resource();
-		var material = new Material { Resource = resource, ShaderName = "shaders/line.shader" };
-		var exporter = new MaterialExporter();
-		CollectionAssert.AreEqual(
-			new[] { (ChannelMapping.R, "TextureRoughness"), (ChannelMapping.G, "TextureMetalness"), (ChannelMapping.B, "TextureAmbientOcclusion") },
-			exporter.GetInputsForTexture( "g_tRma", material ).ToArray() );
-		material.ShaderName = "shaders/glass.shader";
-		Assert.IsTrue( exporter.GetInputsForTexture( "g_tRma", material ).Contains( (ChannelMapping.A, "TextureBlendMask") ) );
-		Assert.IsFalse( exporter.UsedFallback );
-		material.ShaderName = "shaders/custom.shader";
-		_ = exporter.GetInputsForTexture( "g_tCustom", material ).ToArray();
-		Assert.IsTrue( exporter.UsedFallback );
-	}
-
-	[TestMethod]
-	public void UniformMaterialKeepsValuesWithoutBogusDefaultTextureReferences()
-	{
-		using var resource = new Resource { FileName = "materials/default/test.vmat_c" };
-		var material = new Material { Resource = resource, ShaderName = "shaders/line.shader" };
-		resource.Blocks.Add( material );
-		material.TextureParams.Add( "g_tRma", "materials/default/test_vmat_g_trma.generated.vtex" );
-		foreach ( var input in new[] { "TextureRoughness", "TextureMetalness", "TextureAmbientOcclusion" } )
-			material.VectorParams.Add( input, new( 0.5f, 0.5f, 0.5f, 0 ) );
-		using var loader = new ResourceFileLoader( root, TextWriter.Null );
-		using var content = new MaterialExporter().Extract( resource, loader );
-		var text = Encoding.UTF8.GetString( content.Data! );
-		Assert.IsTrue( text.Contains( "\"TextureRoughness\"", StringComparison.Ordinal ) );
-		Assert.IsFalse( text.Contains( "\"TextureRma\"", StringComparison.Ordinal ) );
-		Assert.IsFalse( text.Contains( ".vtex", StringComparison.Ordinal ) );
-		Assert.IsFalse( loader.MissingDependencies );
 	}
 
 	[TestMethod]
@@ -356,7 +383,7 @@ public sealed class DecompilerTests
 		return (code, output.ToString(), error.ToString());
 	}
 
-	static byte[] Container( ushort version, params (string Name, byte[] Data)[] blocks )
+	internal static byte[] Container( ushort version, params (string Name, byte[] Data)[] blocks )
 	{
 		var bytes = new byte[16 + blocks.Length * 12 + blocks.Sum( block => block.Data.Length )];
 		BinaryPrimitives.WriteUInt32LittleEndian( bytes, (uint)bytes.Length );

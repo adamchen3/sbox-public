@@ -1,101 +1,74 @@
 using System.Text;
-using ValveKeyValue;
-using ValveResourceFormat;
-using ValveResourceFormat.Blocks;
-using ValveResourceFormat.CompiledShader;
-using ValveResourceFormat.IO;
-using ValveResourceFormat.ResourceTypes;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Sandbox.ResourceDecompiler;
 
-internal sealed class MaterialExporter : IShaderDataProvider
+internal static class MaterialExporter
 {
-	readonly BasicShaderDataProvider fallback = new();
-	public bool UsedFallback { get; private set; }
-
-	public ContentFile Extract( Resource resource, ResourceFileLoader loader )
+	public static string Export( ResourceContainer container, string source, OutputFiles output )
 	{
-		var material = (Material)resource.DataBlock!;
-		var serializer = KVSerializer.Create( KVSerializationFormat.KeyValues1Text );
-		var scalarSource = new MaterialExtract( material, resource.EditInfo, null, this ).ToValveMaterial();
-		using var input = new MemoryStream( Encoding.UTF8.GetBytes( scalarSource ) );
-		var document = serializer.Deserialize( input );
-		document.Root.Remove( "Compiled Textures" );
-		var output = new ContentFile();
-		try
+		var material = BinaryKv3.Read( container.ReadBlock( "DATA" ) );
+		var shader = material["m_shaderName"]?.GetValue<string>()
+			?? throw new InvalidDataException( "Compiled material has no shader name." );
+		var text = new StringBuilder( "\"Layer0\"\n{\n" );
+		Add( text, "shader", shader );
+		foreach ( var (array, value) in new[] { ("m_intParams", "m_nValue"), ("m_floatParams", "m_flValue"), ("m_vectorParams", "m_value"), ("m_textureParams", "m_pValue") } )
 		{
-			foreach ( var (parameter, texturePath) in material.TextureParams )
+			if ( material[array] is not JsonArray parameters )
+				throw new InvalidDataException( $"Missing material parameter array {array}." );
+			foreach ( var parameter in parameters )
 			{
-				var mappings = GetInputsForTexture( parameter, material ).Where( mapping => !material.VectorParams.ContainsKey( mapping.Name ) ).ToArray();
-				foreach ( var (_, name) in mappings )
-					document.Root.Remove( name );
-				if ( mappings.Length == 0 )
-					continue;
-
-				var textureResource = loader.LoadFileCompiled( texturePath );
-				if ( textureResource is null )
-					continue;
-				if ( textureResource.DataBlock is not Texture texture )
-					throw new InvalidDataException( $"Material texture is not a texture resource: {texturePath}" );
-				if ( texture.IsHighDynamicRange || texture.Depth > 1 || texture.Flags.HasFlag( VTexFlags.CUBE_TEXTURE ) )
-					throw new NotSupportedException( $"Unpacking HDR, array, or cubemap material inputs is not supported: {texturePath}" );
-
-				var materialPath = resource.FileName![..^2];
-				var materialDirectory = Path.GetDirectoryName( materialPath ) ?? "";
-				var unpack = mappings.Select( mapping => new MaterialExtract.UnpackInfo
+				var name = parameter?["m_name"]?.GetValue<string>()
+					?? throw new InvalidDataException( "Material parameter has no name." );
+				var item = parameter[value] ?? throw new InvalidDataException( $"Material parameter {name} has no value." );
+				var encoded = item is JsonArray vector
+					? "[" + string.Join( " ", vector.Select( component => component?.ToJsonString() ?? throw new InvalidDataException( "Null material vector component." ) ) ) + "]"
+					: array == "m_textureParams" ? CompiledTexture( item.GetValue<string>() ) : item.ToJsonString();
+				Add( text, name, encoded );
+			}
+		}
+		text.AppendLine( "\t\"Attributes\"\n\t{" );
+		var recoveredAttributes = new Dictionary<string, string>( StringComparer.OrdinalIgnoreCase );
+		var systemAttributes = new Dictionary<string, string>( StringComparer.OrdinalIgnoreCase );
+		// Inline TextureColor regenerates these dimensions; direct compiled bindings do not.
+		var regeneratesColor = material["m_vectorParams"] is JsonArray vectors
+			&& vectors.Any( item => item?["m_name"]?.GetValue<string>() == "TextureColor" );
+		foreach ( var (array, value) in new[] { ("m_intAttributes", "m_nValue"), ("m_floatAttributes", "m_flValue"), ("m_vectorAttributes", "m_value"), ("m_textureAttributes", "m_pValue"), ("m_stringAttributes", "m_value") } )
+		{
+			if ( material[array] is not JsonArray attributes )
+				throw new InvalidDataException( $"Missing material attribute array {array}." );
+			foreach ( var attribute in attributes )
+			{
+				var name = attribute?["m_name"]?.GetValue<string>() ?? throw new InvalidDataException( "Material attribute has no name." );
+				var item = attribute[value] ?? throw new InvalidDataException( $"Material attribute {name} has no value." );
+				if ( name is "RepresentativeTextureWidth" or "RepresentativeTextureHeight" )
 				{
-					TextureType = mapping.Name,
-					Channel = mapping.Channel,
-					FileName = Path.Combine( materialDirectory, $"{Path.GetFileNameWithoutExtension( materialPath )}.recovered_{mapping.Name}.png" ).Replace( '\\', '/' )
-				} ).ToArray();
-
-				var images = new TextureExtract( textureResource ).ToMaterialMaps( unpack );
-				images.Data = null;
-				images.FileName = materialPath;
-				output.AdditionalFiles.Add( images );
-				if ( unpack.Any( map => !images.SubFiles.Any( file => file.FileName == Path.GetFileName( map.FileName ) ) ) )
-					throw new InvalidDataException( $"Texture exporter did not emit every material map: {texturePath}" );
-				foreach ( var map in unpack )
-					document.Root.Add( map.TextureType, map.FileName );
-			}
-
-			using var stream = new MemoryStream();
-			serializer.Serialize( stream, document );
-			output.Data = stream.ToArray();
-			return output;
-		}
-		catch
-		{
-			output.Dispose();
-			throw;
-		}
-	}
-
-	public IEnumerable<(ChannelMapping Channel, string Name)> GetInputsForTexture( string textureType, Material material )
-	{
-		var shader = Path.GetFileNameWithoutExtension( material.ShaderName );
-		if ( shader is "line" or "glass" or "foliage" or "bark" or "water_simple" )
-		{
-			switch ( textureType )
-			{
-				case "g_tColor":
-					return shader == "line"
-						? [(ChannelMapping.RGBA, "TextureColor")]
-						: [(ChannelMapping.RGB, "TextureColor"), (ChannelMapping.A, "TextureTranslucency")];
-				case "g_tNormal":
-					return shader == "line"
-						? [(ChannelMapping.RGB, "TextureNormal")]
-						: [(ChannelMapping.RGB, "TextureNormal"), (ChannelMapping.A, "TextureTintMask")];
-				case "g_tRma":
-					return shader == "line"
-						? [(ChannelMapping.R, "TextureRoughness"), (ChannelMapping.G, "TextureMetalness"), (ChannelMapping.B, "TextureAmbientOcclusion")]
-						: [(ChannelMapping.R, "TextureRoughness"), (ChannelMapping.G, "TextureMetalness"), (ChannelMapping.B, "TextureAmbientOcclusion"), (ChannelMapping.A, "TextureBlendMask")];
+					if ( !regeneratesColor )
+						systemAttributes[name] = item.ToJsonString();
+					continue;
+				}
+				recoveredAttributes[name] = item is JsonArray vector
+					? "[" + string.Join( " ", vector.Select( component => component?.ToJsonString() ?? throw new InvalidDataException( "Null material attribute component." ) ) ) + "]"
+					: array is "m_textureAttributes" or "m_stringAttributes" ? item.GetValue<string>() : item.ToJsonString();
 			}
 		}
-
-		UsedFallback = true;
-		return fallback.GetInputsForTexture( textureType, material );
+		foreach ( var (name, value) in recoveredAttributes )
+			Add( text, name, value );
+		text.AppendLine( "\t}" );
+		text.AppendLine( "\t\"SystemAttributes\"\n\t{" );
+		foreach ( var (name, value) in systemAttributes )
+			Add( text, name, value );
+		text.AppendLine( "\t}" );
+		text.AppendLine( "}" );
+		output.Add( source, Encoding.UTF8.GetBytes( text.ToString() ) );
+		output.Add( source + ".runtime.json", Encoding.UTF8.GetBytes( material.ToJsonString( new JsonSerializerOptions { WriteIndented = true } ) ) );
+		return "Independent material reconstruction: shader parameters and attributes recovered, with direct compiled texture bindings. Full parsed runtime data retained in .runtime.json. Dynamic expressions and editor-only authoring properties require review; keep compiled texture dependencies.";
 	}
 
-	public string? GetSuffixForInputTexture( string inputName, Material material ) => fallback.GetSuffixForInputTexture( inputName, material );
+	static void Add( StringBuilder text, string name, string value ) => text.Append( '\t' ).Append( Quote( name ) ).Append( '\t' ).AppendLine( Quote( value ) );
+	static string CompiledTexture( string path ) => path.EndsWith( ".vtex", StringComparison.OrdinalIgnoreCase )
+		? path + "_c" : path.EndsWith( ".vtex_c", StringComparison.OrdinalIgnoreCase )
+		? path : throw new NotSupportedException( $"Material texture is not a compiled VTEX reference: {path}" );
+	static string Quote( string value ) => "\"" + value.Replace( "\\", "\\\\", StringComparison.Ordinal ).Replace( "\"", "\\\"", StringComparison.Ordinal ).Replace( "\r", "\\r", StringComparison.Ordinal ).Replace( "\n", "\\n", StringComparison.Ordinal ) + "\"";
 }

@@ -19,12 +19,14 @@ public static class DecompilerFormats
 		".rtex_c",
 
 		".vtex_c",
-		".vmat_c",
-		".vmdl_c",
 		".vsnd_c",
 		".shader_c",
-		".vpcf_c",
+		".vmat_c",
+		".vmdl_c",
 		".vanmgrph_c",
+
+		// Runtime DATA salvage only; editable native source reconstruction is not verified.
+		".vpcf_c",
 		".vpost_c",
 		".vsnap_c",
 	};

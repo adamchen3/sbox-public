@@ -8,11 +8,11 @@ internal static class SoundExporter
 	/// <summary>
 	/// s&box v5 adds a seek-table array at DATA+32. Opus header data contains pre-skip and gain.
 	/// </summary>
-	public static (string Extension, byte[] Data) ExtractVersion5( ResourceContainer container )
+	public static (string Extension, byte[] Data) Extract( ResourceContainer container )
 	{
 		var header = container.ReadBlock( "DATA" );
 		if ( header.Length < 48 )
-			throw new InvalidDataException( "Incomplete version 5 sound header." );
+			throw new InvalidDataException( "Incomplete s&box sound header." );
 
 		var rate = BinaryPrimitives.ReadUInt16LittleEndian( header );
 		var format = header[2];
@@ -31,6 +31,8 @@ internal static class SoundExporter
 
 		if ( format == 4 )
 		{
+			if ( container.Version != 5 )
+				throw new NotSupportedException( "Opus packet-table recovery requires s&box sound version 5." );
 			if ( rate != 48000 || channels > 2 )
 				throw new NotSupportedException( "Only 48 kHz mono/stereo Opus sounds can be remuxed." );
 			return ("opus", RemuxOpus( header, audio, channels, samples ));
@@ -40,7 +42,7 @@ internal static class SoundExporter
 			return ("mp3", audio);
 
 		if ( format is not (0 or 1) )
-			throw new NotSupportedException( $"Unsupported s&box v5 audio format: {format}." );
+			throw new NotSupportedException( $"Unsupported s&box audio format: {format}." );
 
 		var bits = format == 0 ? 16 : 8;
 		if ( (long)samples * channels * (bits / 8) != audio.Length )

@@ -12,6 +12,8 @@ internal sealed class ResourceContainer : IDisposable
 	readonly Dictionary<string, List<(long Offset, int Length)>> blocks = new( StringComparer.Ordinal );
 	public ushort Version { get; private set; }
 	public uint NonStreamingSize { get; private set; }
+	public long StreamingSize => stream.Length - NonStreamingSize;
+	public IEnumerable<string> BlockNames => blocks.Keys;
 
 	public ResourceContainer( string path )
 	{
@@ -85,6 +87,21 @@ internal sealed class ResourceContainer : IDisposable
 		stream.Position = block.Offset;
 		stream.ReadExactly( data );
 		return data;
+	}
+
+	public IReadOnlyList<byte[]> ReadBlocks( string name )
+	{
+		if ( !blocks.TryGetValue( name, out var entries ) )
+			return [];
+		var result = new List<byte[]>( entries.Count );
+		foreach ( var (offset, length) in entries )
+		{
+			var data = new byte[length];
+			stream.Position = offset;
+			stream.ReadExactly( data );
+			result.Add( data );
+		}
+		return result;
 	}
 
 	(long Offset, int Length) GetSingleBlock( string name )

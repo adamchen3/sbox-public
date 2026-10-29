@@ -1,8 +1,6 @@
+using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json;
-using ValveResourceFormat;
-using ValveResourceFormat.IO;
-using ValveResourceFormat.ResourceTypes;
 
 namespace Sandbox.ResourceDecompiler;
 
@@ -41,64 +39,57 @@ internal static class ResourceExporter
 		if ( Path.GetExtension( path ).Equals( ".shader_c", StringComparison.OrdinalIgnoreCase ) )
 			return ExportShader( container, source, output );
 
-		if ( Path.GetExtension( path ).Equals( ".vsnd_c", StringComparison.OrdinalIgnoreCase ) && container.Version == 5 )
+		if ( Path.GetExtension( path ).Equals( ".vsnd_c", StringComparison.OrdinalIgnoreCase ) && container.Version is 4 or 5 )
 		{
-			var (extension, data) = SoundExporter.ExtractVersion5( container );
+			var (extension, data) = SoundExporter.Extract( container );
 			return WriteSound( container, source, output, extension, data );
 		}
 
-		var contentRoot = FindContentRoot( path, root );
-		using var loader = new ResourceFileLoader( contentRoot, log );
-		using var resource = ResourceFileLoader.ReadResource( path );
-		resource.FileName = Path.GetRelativePath( contentRoot, path ).Replace( '\\', '/' );
-
-		if ( resource.ResourceType == ResourceType.Sound )
-			return ExportSound( resource, container, source, output );
-
-		var regenerateNormals = NativeExport.PrepareModel( resource );
-		var materialExporter = new MaterialExporter();
-		using var content = resource.ResourceType switch
+		if ( Path.GetExtension( path ).Equals( ".vtex_c", StringComparison.OrdinalIgnoreCase ) )
 		{
-			ResourceType.Texture => NativeExport.Texture( resource ),
-			ResourceType.Material => materialExporter.Extract( resource, loader ),
-			ResourceType.Model or ResourceType.Particle
-				or ResourceType.AnimationGraph or ResourceType.PostProcessing or ResourceType.ParticleSnapshot
-				=> FileExtract.Extract( resource, loader ),
-			_ => throw new NotSupportedException( $"No editable-source exporter for {Path.GetExtension( path )} ({resource.ResourceType})." )
-		};
-
-		AddContent( output, content, source, contentRoot );
-		output.Commit( source );
-		var warnings = new List<string>();
-		if ( loader.MissingDependencies )
-			warnings.Add( "Some referenced resources are missing; see dependency messages." );
-		if ( regenerateNormals || loader.RegenerateNormals )
-			warnings.Add( "Mesh geometry was recovered without unsupported packed tangent frames; normals/tangents must be regenerated in ModelDoc." );
-		if ( materialExporter.UsedFallback )
-			warnings.Add( "Some shader texture input mappings were inferred; check them in the Material Editor." );
-		return warnings.Count > 0 ? string.Join( " ", warnings ) : null;
-	}
-
-	static void AddContent( OutputFiles output, ContentFile content, string destination, string contentRoot )
-	{
-		if ( content.Data is not null )
-			output.Add( destination, content.Data );
-
-		foreach ( var file in content.SubFiles )
-		{
-			var bytes = file.Extract?.Invoke() ?? throw new InvalidDataException( $"No extractor for '{file.FileName}'." );
-			output.Add( Path.Combine( Path.GetDirectoryName( destination )!, NormalizePath( file.FileName ) ), bytes );
+			var warning = TextureExporter.Export( container, source, FindContentRoot( path, root ), output );
+			var metadata = ReadGuid( container );
+			if ( metadata.Count > 0 )
+				output.Add( source + ".meta", JsonSerializer.SerializeToUtf8Bytes( metadata ) );
+			output.Commit( source );
+			return warning;
 		}
 
-		foreach ( var file in content.AdditionalFiles )
+		if ( Path.GetExtension( path ).Equals( ".vmat_c", StringComparison.OrdinalIgnoreCase ) )
 		{
-			if ( string.IsNullOrWhiteSpace( file.FileName ) )
-				throw new InvalidDataException( "An extracted dependency has no file name." );
-			AddContent( output, file, Path.Combine( contentRoot, NormalizePath( file.FileName ) ), contentRoot );
+			var warning = MaterialExporter.Export( container, source, output );
+			var metadata = ReadGuid( container );
+			if ( metadata.Count > 0 )
+				output.Add( source + ".meta", JsonSerializer.SerializeToUtf8Bytes( metadata ) );
+			output.Commit( source );
+			return warning;
 		}
-	}
 
-	static string NormalizePath( string path ) => path.Replace( '/', Path.DirectorySeparatorChar ).Replace( '\\', Path.DirectorySeparatorChar );
+		if ( Path.GetExtension( path ).Equals( ".vanmgrph_c", StringComparison.OrdinalIgnoreCase ) )
+		{
+			output.Add( source, Kv3Source.AnimationGraph( container.ReadBlock( "DATA" ) ) );
+			var metadata = ReadGuid( container );
+			if ( metadata.Count > 0 )
+				output.Add( source + ".meta", JsonSerializer.SerializeToUtf8Bytes( metadata ) );
+			output.Commit( source );
+			return null;
+		}
+
+		if ( Path.GetExtension( path ).Equals( ".vmdl_c", StringComparison.OrdinalIgnoreCase ) )
+		{
+			var (primary, warning) = ModelExporter.Export( container, source, FindContentRoot( path, root ), output );
+			var metadata = ReadGuid( container );
+			if ( primary is not null && metadata.Count > 0 )
+				output.Add( source + ".meta", JsonSerializer.SerializeToUtf8Bytes( metadata ) );
+			output.Commit( primary );
+			return warning;
+		}
+
+		if ( new[] { ".vpcf_c", ".vpost_c", ".vsnap_c" }.Contains( Path.GetExtension( path ), StringComparer.OrdinalIgnoreCase ) )
+			return RuntimeDataExporter.Export( container, source, output );
+
+		throw new NotSupportedException( $"No independently verified source reconstruction for {Path.GetExtension( path )} (resource version {container.Version}). VRF fallback is disabled; no placeholder source was written." );
+	}
 
 	static bool HasBlobReference( JsonElement element )
 	{
@@ -121,25 +112,27 @@ internal static class ResourceExporter
 		return fallback;
 	}
 
-	static string ExportSound( Resource resource, ResourceContainer container, string source, OutputFiles output )
-	{
-		if ( resource.DataBlock is not Sound sound )
-			throw new NotSupportedException( "This sound container has no supported audio data." );
-
-		var extension = FileExtract.GetExtension( resource );
-		if ( extension is not ("wav" or "mp3") )
-			throw new NotSupportedException( $"Audio export for {sound.SoundType} is not supported." );
-
-		using var audio = sound.GetSoundStream();
-		return WriteSound( container, source, output, extension, audio.ToArray() );
-	}
-
 	static string WriteSound( ResourceContainer container, string source, OutputFiles output, string extension, byte[] data )
 	{
 		var audioPath = Path.ChangeExtension( source, extension );
 		output.Add( audioPath, data );
 
-		var metadata = new Dictionary<string, JsonElement>();
+		var metadata = ReadGuid( container );
+		var header = container.ReadBlock( "DATA" );
+		var rate = BinaryPrimitives.ReadUInt16LittleEndian( header );
+		var loopStart = BinaryPrimitives.ReadInt32LittleEndian( header.AsSpan( 4 ) );
+		var loopEnd = BinaryPrimitives.ReadInt32LittleEndian( header.AsSpan( 44 ) );
+		var samples = BinaryPrimitives.ReadUInt32LittleEndian( header.AsSpan( 8 ) );
+		if ( loopEnd < 0 || loopEnd > samples || (loopEnd > 0 && (loopStart < 0 || loopStart >= loopEnd)) )
+			throw new InvalidDataException( "Invalid compiled audio loop boundaries." );
+		metadata.Add( "loop", JsonSerializer.SerializeToElement( loopEnd > 0 ) );
+		if ( loopEnd > 0 )
+		{
+			metadata.Add( "start", JsonSerializer.SerializeToElement( (double)loopStart / rate ) );
+			metadata.Add( "end", JsonSerializer.SerializeToElement( (double)loopEnd / rate ) );
+		}
+		if ( header[2] is 0 or 1 )
+			metadata.Add( "compress", JsonSerializer.SerializeToElement( false ) );
 		foreach ( var (block, key) in new[] { ("LIPS", "visemes"), ("SUBT", "subtitles") } )
 		{
 			if ( !container.HasBlock( block ) )
@@ -148,11 +141,22 @@ internal static class ResourceExporter
 			metadata.Add( key, document.RootElement.Clone() );
 		}
 
-		if ( metadata.Count > 0 )
-			output.Add( audioPath + ".meta", JsonSerializer.SerializeToUtf8Bytes( metadata ) );
+		output.Add( audioPath + ".meta", JsonSerializer.SerializeToUtf8Bytes( metadata ) );
 
 		output.Commit( null );
 		return $"Exported {audioPath}. s&box compiles audio files to .vsnd_c; there is no equivalent editable .vsnd audio source.";
+	}
+
+	static Dictionary<string, JsonElement> ReadGuid( ResourceContainer container )
+	{
+		var metadata = new Dictionary<string, JsonElement>();
+		if ( !container.HasBlock( "GUID" ) )
+			return metadata;
+		var bytes = container.ReadBlock( "GUID" );
+		if ( bytes.Length != 16 )
+			throw new InvalidDataException( "Invalid resource GUID block." );
+		metadata.Add( "guid", JsonSerializer.SerializeToElement( new Guid( bytes ).ToString() ) );
+		return metadata;
 	}
 
 	static string ExportShader( ResourceContainer container, string source, OutputFiles output )
