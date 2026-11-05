@@ -35,6 +35,7 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo( "CreateGameCache" )]
 [assembly: InternalsVisibleTo( "Sandbox.Demo" )]
 [assembly: InternalsVisibleTo( "Sandbox.ResourceDecompiler" )]
+[assembly: InternalsVisibleTo( "Sandbox.ShaderLab" )]
 
 [assembly: TasksPersistOnContextReset]
 
