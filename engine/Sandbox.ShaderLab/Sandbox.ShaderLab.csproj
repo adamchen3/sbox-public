@@ -7,6 +7,9 @@
     <Nullable>enable</Nullable>
     <namespace>Sandbox.ShaderLab</namespace>
     <SentryDisableSourceGenerator>true</SentryDisableSourceGenerator>
+    <GameDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../../game'))</GameDir>
+    <ShaderCompilerPath Condition="'$(OS)' == 'Windows_NT'">$(GameDir)\bin\managed\ShaderCompiler.exe</ShaderCompilerPath>
+    <ShaderCompilerPath Condition="'$(OS)' != 'Windows_NT'">$(GameDir)/bin/managed/ShaderCompiler</ShaderCompilerPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,5 +18,25 @@
     <ProjectReference Include="..\Sandbox.SceneRenderer\Sandbox.SceneRenderer.csproj" />
     <ProjectReference Include="..\Sandbox.Tools\Sandbox.Tools.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <ShaderLabFile Include="Shaders\**\*" />
+    <ShaderLabShader Include="Shaders\**\*.shader" />
+  </ItemGroup>
+
+  <Target Name="CopyShaderLabShaders" AfterTargets="Build">
+    <MakeDir Directories="@(ShaderLabFile->'$(MSBuildProjectDirectory)\..\..\game\core\ShaderLab\Shaders\%(RecursiveDir)')" />
+    <Copy SourceFiles="@(ShaderLabFile)"
+          DestinationFiles="@(ShaderLabFile->'$(MSBuildProjectDirectory)\..\..\game\core\ShaderLab\Shaders\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CompileShaderLabShaders" AfterTargets="CopyShaderLabShaders">
+    <Error Condition="!Exists('$(ShaderCompilerPath)')"
+           Text="ShaderCompiler was not found at '$(ShaderCompilerPath)'. Build or install the s&amp;box engine first." />
+    <Exec
+      Command="&quot;$(ShaderCompilerPath)&quot; &quot;$(GameDir)\core\ShaderLab\Shaders\%(ShaderLabShader.RecursiveDir)%(ShaderLabShader.Filename)%(ShaderLabShader.Extension)&quot;"
+      WorkingDirectory="$(GameDir)" />
+  </Target>
 
 </Project>

@@ -94,6 +94,7 @@ engine/TestResults/
 /game/core/cfg/*.vcfg
 /game/core/cfg/video.txt
 /game/core/cfg/video_tools.txt
+/game/core/ShaderLab/
 /game/data
 /game/download
 /game/download_test

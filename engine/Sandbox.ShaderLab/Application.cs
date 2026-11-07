@@ -7,15 +7,24 @@ public class Application
     public void Run()
     {
         var game = new Game();
-        game.Initialize();
-
-        while ( game.IsRunning )
+        try
         {
-            game.ProcessInput();
-            game.Update();
-            game.Render();
+            game.Initialize();
+
+            while ( game.IsRunning )
+            {
+                game.ProcessInput();
+                if ( !game.IsRunning )
+                    break;
+
+                game.Update();
+                game.Render();
+            }
         }
-        game.Cleanup();
+        finally
+        {
+            game.Cleanup();
+        }
     }
 
 }

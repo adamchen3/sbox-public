@@ -9,6 +9,7 @@ namespace Sandbox.ShaderLab;
 public partial class Game
 {
     private CMaterialSystem2AppSystemDict _appSystem;
+    private bool _enginePreInitStarted;
 
     RenderDisplayModeUsage GetModeUsage( IntPtr Handle )
     {
@@ -51,13 +52,23 @@ public partial class Game
         }
 
         _appSystem = CMaterialSystem2AppSystemDict.Create( new MaterialSystem2AppSystemDictCreateInfo() );
+        if ( !_appSystem.IsValid )
+            throw new InvalidOperationException( "Couldn't create the engine app system." );
         _appSystem.SetModGameSubdir( "core" );
 
         // 执行了这个之后，g_pRenderDevice就能正常访问了。
+        _enginePreInitStarted = true;
         if ( !NativeEngine.EngineGlobal.SourceEnginePreInit( "-nosteam -novr -panelapp", _appSystem ) )
         {
             throw new Exception( "SourceEnginePreInit failed" );
         }
+
+        // 添加一下shader文件的搜索路径,。不行，没用的。
+        // var shaderDirectory = Path.Combine( gameFolder, "ShaderLab" );
+        // if ( !Directory.Exists( shaderDirectory ) )
+        //     throw new DirectoryNotFoundException( $"Shader directory not found: {shaderDirectory}" );
+
+        // NativeEngine.FullFileSystem.AddProjectPath( "shaderlab", shaderDirectory );
 
         // if ( !NativeEngine.EngineGlobal.SourceEnginePanelAppInit( _appSystem, false ) )
         // {

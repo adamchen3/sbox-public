@@ -6,7 +6,6 @@ namespace Sandbox.ShaderLab;
 public partial class Game
 {
 
-    private IRenderContext RenderContext { get; set; }
     private SwapChainHandle_t SwapChain { get; set; }
     private RenderDeviceInfo_t SwapChainMode { get; set; }
 
@@ -21,7 +20,6 @@ public partial class Game
         if ( width < 1 || height < 1 )
             throw new InvalidOperationException( "The SDL window has an invalid size." );
 
-        RenderContext = g_pRenderDevice.CreateRenderContext( 0 );
 
         SwapChainMode = new RenderDeviceInfo_t
         {
