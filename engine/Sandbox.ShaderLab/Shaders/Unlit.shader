@@ -16,12 +16,13 @@ FEATURES
 
 COMMON
 {
-    #include "system.fxc"
+#include "system.fxc"
 }
 
 struct VS_INPUT
 {
-    float3 position : POSITION < Semantic( PosXyz ); >;
+    float3 position : POSITION < Semantic(PosXyz);
+    > ;
 };
 
 struct PS_INPUT
@@ -31,18 +32,26 @@ struct PS_INPUT
 
 VS
 {
-    PS_INPUT MainVs( VS_INPUT input )
+    PS_INPUT MainVs(VS_INPUT input)
     {
         PS_INPUT output;
-        output.position = float4( input.position, 1.0 );
+        output.position = float4(input.position, 1.0);
         return output;
     }
 }
 
 PS
 {
-    float4 MainPs( PS_INPUT input ) : SV_Target0
+    RenderState( BlendEnable, true );
+    RenderState( SrcBlend, SRC_ALPHA );
+    RenderState( DstBlend, INV_SRC_ALPHA );
+    RenderState( BlendOp, ADD );
+    RenderState( SrcBlendAlpha, ONE );
+    RenderState( DstBlendAlpha, INV_SRC_ALPHA );
+    RenderState( BlendOpAlpha, ADD );
+
+    float4 MainPs(PS_INPUT input) : SV_Target0
     {
-        return float4( 0.0, 1.0, 0.0, 1.0 );
+        return float4(0.31, 0.42, 0.96, 0.5);
     }
 }

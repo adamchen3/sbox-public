@@ -22,6 +22,7 @@
   <ItemGroup>
     <ShaderLabFile Include="Shaders\**\*" />
     <ShaderLabShader Include="Shaders\**\*.shader" />
+    <None Update="Textures\bird.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="CopyShaderLabShaders" AfterTargets="Build">

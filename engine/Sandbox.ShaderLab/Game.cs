@@ -27,7 +27,7 @@ public partial class Game
 
     private void InitEffect()
     {
-        _effect = new UnlitEffect();
+        _effect = new BirdBackgroundEffect();
         if ( !_effect.Initilize() )
             throw new InvalidOperationException( "Couldn't initialize the effect." );
     }
