@@ -207,6 +207,14 @@ public sealed class ClipDocument : IAnimationDocument
 		set => _root[AlignmentReferenceKey] = value ?? "";
 	}
 
+	[Property, Group( "Alignment", StartFolded = true ), Title( "Reference Take" ), Editor( "animgraph.take" ), ShowIf( nameof( HasAlignment ), true ),
+		Description( "Which animation to align against when the reference file contains several takes." )]
+	public int AlignmentReferenceTake
+	{
+		get => ReadInt( AlignmentReferenceTakeKey, 0 );
+		set => _root[AlignmentReferenceTakeKey] = Math.Max( value, 0 );
+	}
+
 	[Property, Group( "Alignment", StartFolded = true ), Title( "Bone" ), Editor( "animgraph.bone" ), ShowIf( nameof( HasAlignment ), true )]
 	public string AlignmentBone
 	{
@@ -348,32 +356,47 @@ public sealed class ClipDocument : IAnimationDocument
 	}
 
 	internal Skeleton SourceSkeleton => string.IsNullOrWhiteSpace( SkeletonName ) ? null : Skeleton.Load( SkeletonName );
-	private string _takeSource;
-	private int _takeIndex = -1;
-	private int _sourceFrameCount;
-	private IReadOnlyList<string> _animationTakes = [];
+	private readonly AnimationTakeInfo _sourceTakes = new();
+	private readonly AnimationTakeInfo _alignmentReferenceTakes = new();
 
 	internal IReadOnlyList<string> GetAnimationTakes( bool refresh = false )
-	{
-		if ( refresh || _takeSource != SourceFilename || _takeIndex != Take )
-		{
-			_takeSource = SourceFilename;
-			_takeIndex = Take;
-			_sourceFrameCount = 0;
-			_animationTakes = [];
-			try
-			{
-				if ( !string.IsNullOrWhiteSpace( _takeSource ) )
-					_animationTakes = ModelEditor.ModelDoc.GetAnimationTakes( _takeSource, _takeIndex, out _sourceFrameCount );
-			}
-			catch ( InvalidOperationException exception )
-			{
-				_sourceFrameCount = 0;
-				Log.Warning( $"Couldn't read animation takes for '{_takeSource}': {exception.Message}" );
-			}
-		}
+		=> _sourceTakes.GetTakes( SourceFilename, Take, refresh );
 
-		return _animationTakes;
+	internal IReadOnlyList<string> GetAlignmentReferenceTakes( bool refresh = false )
+		=> _alignmentReferenceTakes.GetTakes( AlignmentReference, AlignmentReferenceTake, refresh );
+
+	private sealed class AnimationTakeInfo
+	{
+		private string _source;
+		private int _take = -1;
+		private IReadOnlyList<string> _takes = [];
+
+		public int FrameCount { get; private set; }
+
+		public IReadOnlyList<string> GetTakes( string source, int take, bool refresh )
+		{
+			if ( refresh || _source != source || _take != take )
+			{
+				_source = source;
+				_take = take;
+				FrameCount = 0;
+				_takes = [];
+				try
+				{
+					if ( !string.IsNullOrWhiteSpace( _source ) )
+					{
+						_takes = ModelEditor.ModelDoc.GetAnimationTakes( _source, _take, out var frameCount );
+						FrameCount = frameCount;
+					}
+				}
+				catch ( InvalidOperationException exception )
+				{
+					Log.Warning( $"Couldn't read animation takes for '{_source}': {exception.Message}" );
+				}
+			}
+
+			return _takes;
+		}
 	}
 
 	internal int SourceFrameCount
@@ -381,7 +404,7 @@ public sealed class ClipDocument : IAnimationDocument
 		get
 		{
 			GetAnimationTakes();
-			return _sourceFrameCount;
+			return _sourceTakes.FrameCount;
 		}
 	}
 
@@ -549,6 +572,25 @@ public sealed class ClipDocument : IAnimationDocument
 
 		internal JsonObject Json { get; }
 
+		internal bool IsTypedEvent => Name == ClipEventTypes.ManagedName;
+		internal string DataTypeName => ReadData( "Type" )?.GetValue<string>() ?? string.Empty;
+		internal TypeDescription DataType => EditorTypeLibrary.GetType<AnimationEvent>( DataTypeName );
+
+		internal AnyOfType<AnimationEvent> Data
+		{
+			get => DataType is { IsAbstract: false } type
+				? new( (AnimationEvent)Sandbox.Json.FromNode( ReadData( "Data" ), type.TargetType ) )
+				: default;
+			set
+			{
+				Json["m_eventData"] = value.HasValue ? new JsonObject
+				{
+					["Type"] = value.Value.GetType().FullName,
+					["Data"] = Sandbox.Json.ToNode( value.Value )
+				} : null;
+			}
+		}
+
 		/// <summary>
 		/// Frame the event starts on. The compiler normalizes this against the clip's length, so
 		/// an event stays where it was put if the clip's duration is overridden.
@@ -591,6 +633,8 @@ public sealed class ClipDocument : IAnimationDocument
 			get => ReadString( NameKey );
 			set => Json[NameKey] = value ?? string.Empty;
 		}
+
+		private JsonNode ReadData( string key ) => Json["m_eventData"]?[key];
 
 		/// <summary>
 		/// Stored as its number rather than its name - that's what the runtime reads it as.
@@ -936,7 +980,7 @@ public sealed class ClipDocument : IAnimationDocument
 		SourceFilenameKey, SkeletonKey, TakeKey, StartFrameKey, EndFrameKey, ImportScaleKey, ImportFrameRateKey, DurationOverrideKey, DisableInterpolationKey,
 		SmoothLoopKey, SmoothLoopFramesFromStartKey, SmoothLoopFramesFromEndKey,
 		StartLoopFrameKey, LinearDeltaKey, LinearDeltaSplineKey, MorphFrameWeightsKey,
-		AlignmentReferenceKey, AlignmentBoneKey, AlignmentFrameModeKey, AlignmentFrameKey,
+		AlignmentReferenceKey, AlignmentReferenceTakeKey, AlignmentBoneKey, AlignmentFrameModeKey, AlignmentFrameKey,
 		AlignmentReferenceFrameModeKey, AlignmentReferenceFrameKey,
 		"m_bAlignTX", "m_bAlignTY", "m_bAlignTZ", "m_bAlignRX", "m_bAlignRY", "m_bAlignRZ",
 		ExtractMotionKey, MotionExtractionBoneKey, "m_bExtractMotionTX", "m_bExtractMotionTY", "m_bExtractMotionTZ",
@@ -968,6 +1012,7 @@ public sealed class ClipDocument : IAnimationDocument
 	private const string LinearDeltaSplineKey = "m_bLinearDeltaSpline";
 	private const string MorphFrameWeightsKey = "m_morphFrameWeights";
 	private const string AlignmentReferenceKey = "m_alignToClipFilename";
+	private const string AlignmentReferenceTakeKey = "m_nAlignToTake";
 	private const string AlignmentBoneKey = "m_alignBone";
 	private const string AlignmentFrameModeKey = "m_alignFrameType";
 	private const string AlignmentFrameKey = "m_nAlignFrameIdx";

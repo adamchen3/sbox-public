@@ -56,7 +56,7 @@ internal static class ResourceLoader
 
 			try
 			{
-				var se = Game.Resources.LoadGameResource( type, file, fileSystem, true, sourcePackage );
+				var se = Game.Resources.LoadGameResource( type, file, fileSystem, true, sourcePackage, knownToExist: true );
 				if ( se != null ) allResources.Add( se );
 			}
 			catch ( Exception ex )
@@ -106,9 +106,11 @@ internal static class ResourceLoader
 
 		var allResources = new List<GameResource>();
 
-		foreach ( var file in allFiles )
+		for ( int i = 0; i < allFiles.Count; i++ )
 		{
+			var file = allFiles[i];
 			ct.ThrowIfCancellationRequested();
+			LoadProgress.Report( (double)i / allFiles.Count );
 			var extension = System.IO.Path.GetExtension( file );
 			if ( !types.TryGetValue( extension, out var type ) ) continue;
 			if ( includeExtension is not null && !includeExtension( extension ) ) continue;
