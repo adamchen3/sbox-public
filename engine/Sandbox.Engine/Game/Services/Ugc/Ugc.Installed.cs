@@ -108,15 +108,11 @@ internal static partial class Ugc
 		removed.Remove( id );
 
 		// In use - what's mounted is what we've got, Steam rewriting files we're using breaks things
-		if ( item.IsInstalled && IsMounted( id ) )
+		if ( item.IsInstalled && WorkshopFileSystem.IsInUse( id ) )
 			return item.InstallFolder;
-
-		var downloaded = false;
 
 		if ( item.NeedsDownload || item.IsDownloading || await IsOutdatedAsync( item, token ) )
 		{
-			downloaded = true;
-
 			if ( !RequestDownload( id ) )
 			{
 				// Still a failed download, even with an older version to carry on with
@@ -164,8 +160,7 @@ internal static partial class Ugc
 			return null;
 
 		// So we know we've got it, if it's new
-		if ( downloaded || !installed.Contains( id ) )
-			Refresh();
+		MarkInstalled( id );
 
 		return item.InstallFolder;
 	}
@@ -181,20 +176,12 @@ internal static partial class Ugc
 	}
 
 	/// <summary>
-	/// Is this item's content mounted by a package right now? Steam mustn't rewrite it while it is.
-	/// </summary>
-	static bool IsMounted( ulong id )
-	{
-		return PackageManager.ActivePackages.Any( x => x.Package is { InstallsFromWorkshop: true } p && p.WorkshopId == id );
-	}
-
-	/// <summary>
 	/// Download the latest version of this item - unless it's mounted, Steam rewriting files we're using
 	/// breaks things. It's picked up again once it isn't, see <see cref="OnPackagesUnmounted"/>.
 	/// </summary>
 	static void StartUpdate( ulong id )
 	{
-		if ( !IsMounted( id ) )
+		if ( !WorkshopFileSystem.IsInUse( id ) )
 			RequestDownload( id );
 	}
 
@@ -270,8 +257,11 @@ internal static partial class Ugc
 	{
 		Dispatch.Install<ItemInstalled_t>( x =>
 		{
+			// Steam reports items installed for other apps too
+			if ( x.AppID.Value != Application.AppId ) return;
+
 			Log.Info( $"Workshop item {NameOf( x.PublishedFileId )} downloaded" );
-			Refresh();
+			MarkInstalled( x.PublishedFileId );
 		} );
 		Dispatch.Install<DownloadItemResult_t>( x => OnDownloadResult( x.PublishedFileId, x.Result ) );
 		Dispatch.Install<RemoteStoragePublishedFileSubscribed_t>( x => Refresh() );
@@ -280,6 +270,17 @@ internal static partial class Ugc
 		Refresh();
 
 		_ = CheckForUpdatesAsync();
+	}
+
+	/// <summary>
+	/// One item finished installing. <see cref="Refresh"/> would rebuild every item from Steam to find that out.
+	/// </summary>
+	static void MarkInstalled( ulong id )
+	{
+		if ( !subscribed.Contains( id ) && removed.Contains( id ) )
+			return;
+
+		installed.Add( id );
 	}
 
 	/// <summary>

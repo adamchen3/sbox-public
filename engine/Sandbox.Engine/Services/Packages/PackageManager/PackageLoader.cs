@@ -18,7 +18,9 @@ internal sealed partial class PackageLoader : IDisposable
 	private List<LoadedAssembly> Loaded { get; set; } = new();
 	private LoadContext LoadContext { get; set; }
 	private ILHotload ILHotload { get; set; }
-	private HotloadManager HotloadManager { get; set; }
+	internal HotloadManager HotloadManager { get; private set; }
+	private bool retryPackageMigration;
+	private Assembly retainedScriptAssembly;
 	private List<LoadedAssembly> IncomingThisHotload { get; } = new();
 
 	/// <summary>
@@ -44,7 +46,7 @@ internal sealed partial class PackageLoader : IDisposable
 			ILHotload = new ILHotload( name );
 		}
 		HotloadManager = new HotloadManager( name );
-		HotloadManager.OnSuccess += OnFullHotloadSuccess;
+		HotloadManager.OnSuccess += OnHotloadSuccess;
 		HotloadManager.AssemblyResolver = PackageManager.AssemblyResolver;
 
 		loadedPackages.Clear();
@@ -73,6 +75,8 @@ internal sealed partial class PackageLoader : IDisposable
 		dllWatchers.Clear();
 
 		OnAfterHotload = null;
+		retryPackageMigration = false;
+		retainedScriptAssembly = null;
 
 		Loaded.Clear();
 		Loaded = null;
@@ -101,8 +105,9 @@ internal sealed partial class PackageLoader : IDisposable
 
 		// Entries without a package come from a stream (e.g. assemblies sent by a server)
 		// and were already swapped in by AddAssembly when they arrived.
+		loadedPackages.RemoveWhere( x => x.FileSystem is null );
 		var changedPackageDlls = allChangedDlls
-										.Where( x => x.ap is not null )
+										.Where( x => x.ap?.FileSystem is not null )
 										.ToArray();
 
 		var changedPackages = new HashSet<PackageManager.ActivePackage>();
@@ -293,7 +298,7 @@ internal sealed partial class PackageLoader : IDisposable
 		log.Trace( $"LoadPackage( {ident} )" );
 		var sw = Stopwatch.StartNew();
 
-		var ap = PackageManager.Find( ident, true, exactName );
+		var ap = PackageManager.Find( ident, exactName );
 		if ( ap == null )
 		{
 			var packages = string.Join( " - \n", PackageManager.ActivePackages.Select( x => x.Package.FullIdent ) );
@@ -301,6 +306,7 @@ internal sealed partial class PackageLoader : IDisposable
 			throw new System.Exception( $"LoadPackage: Couldn't find active package '{ident}' ({exactName}:exactName)\n{packages}" );
 		}
 
+		loadedPackages.RemoveWhere( x => x.FileSystem is null );
 		if ( loadedPackages.Contains( ap ) )
 			return true;
 
@@ -324,7 +330,7 @@ internal sealed partial class PackageLoader : IDisposable
 
 				if ( needsToolsPackage )
 				{
-					LoadPackage( "local.toolbase#local" );
+					LoadPackage( "local.toolbase" );
 				}
 			}
 		}
@@ -334,7 +340,7 @@ internal sealed partial class PackageLoader : IDisposable
 		//
 		foreach ( var child in ap.Package.EnumeratePackageReferences() )
 		{
-			if ( PackageManager.Find( child, true, false ) == null )
+			if ( PackageManager.Find( child ) == null )
 			{
 				log.Warning( $"LoadPackage: skipping missing dependency '{child}'" );
 				continue;
@@ -404,6 +410,7 @@ internal sealed partial class PackageLoader : IDisposable
 		{
 			PackageManager.AssemblyResolver.AddAssembly( dllBytes, assemblyName );
 			loaded.Assembly = LoadContext.LoadWithEmbeds( dllBytes, false );
+			PackageManager.AssemblyResolver.TrackLoadedImage( loaded.Assembly, dllBytes );
 			loaded.Version = loaded.Assembly?.GetName().Version;
 			loaded.Name = loaded.Assembly?.GetName().Name;
 		}
@@ -647,7 +654,7 @@ internal sealed partial class PackageLoader : IDisposable
 	/// </summary>
 	public LoadedAssembly[] GetLoadedAssemblies( string packageIdent, bool deep, bool allowEditor )
 	{
-		var package = PackageManager.Find( packageIdent, true );
+		var package = PackageManager.Find( packageIdent );
 		if ( package is null ) return Array.Empty<LoadedAssembly>();
 
 		var assemblyList = package.AssemblyFileSystem.FindFile( "", "*.dll", true ).ToArray();
@@ -701,9 +708,45 @@ internal sealed partial class PackageLoader : IDisposable
 	/// </summary>
 	internal static Func<bool> HoldHotload { get; set; }
 
+	/// <summary>
+	/// Migrates an emitted script assembly using the same roots and completion callbacks as package hotload.
+	/// A pending package replacement includes the script change in its next swap.
+	/// </summary>
+	/// <returns>The migration error if the replacement was queued but its reference walk was interrupted.</returns>
+	internal Exception ReplaceScriptAssembly( Assembly previous, Assembly incoming )
+	{
+		if ( HotloadManager is null )
+		{
+			// Context teardown can follow disposal of its package loader.
+			if ( incoming is null ) return null;
+			throw new ObjectDisposedException( nameof( PackageLoader ) );
+		}
+
+		HotloadManager.Replace( previous, incoming );
+
+		// If a package is changing too, Tick rebuilds script dependencies and migrates both changes together.
+		if ( previous is null || incoming is null || IncomingThisHotload.Count > 0 || retryPackageMigration )
+		{
+			return null;
+		}
+
+		lock ( MixingThread.LockObject )
+		{
+			try
+			{
+				HotloadManager.DoSwap();
+				return null;
+			}
+			catch ( Exception e ) when ( e is not OutOfMemoryException )
+			{
+				return e;
+			}
+		}
+	}
+
 	public void Tick()
 	{
-		if ( !changedPackageDlls.Any() && IncomingThisHotload.Count == 0 )
+		if ( !changedPackageDlls.Any() && IncomingThisHotload.Count == 0 && !retryPackageMigration )
 		{
 			return;
 		}
@@ -712,34 +755,65 @@ internal sealed partial class PackageLoader : IDisposable
 
 		LoadPendingChanges();
 
-		try
+		lock ( MixingThread.LockObject )
 		{
-			// We want to lock the mixing thread,
-			// so things don't get modified while it's using them
-			lock ( MixingThread.LockObject )
+			var batch = IncomingThisHotload.ToArray();
+			IncomingThisHotload.Clear();
+			var incoming = batch.Where( assembly => !assembly.IsEditorAssembly ).Select( assembly => assembly.Assembly ).ToArray();
+			using var scripts = GlobalContext.Current?.PrepareScriptHotload( incoming, HotloadManager );
+
+			// The old packages have already been unregistered. Publish the replacements even if migration stops partway.
+			var registered = false;
+			void RegisterPackages()
 			{
-				HotloadManager.DoSwap();
+				foreach ( var assembly in batch )
+				{
+					TriggerRegisterEvent( assembly );
+				}
+				registered = true;
+			}
+
+			var hotload = HotloadManager.Hotload;
+			if ( scripts is null ) hotload.RetainedAssembly = retainedScriptAssembly;
+			retainedScriptAssembly = null;
+			retryPackageMigration = false;
+
+			try
+			{
+				HotloadManager.DoSwap( batch.Length > 0 ? RegisterPackages : null );
+			}
+			catch ( Exception e ) when ( e is not OutOfMemoryException )
+			{
+				if ( batch.Length > 0 && !registered )
+				{
+					RegisterPackages();
+					OnHotloadSuccess();
+				}
+				// Retry an unconsumed batch once, with the same script generation retained during the walk.
+				if ( hotload.GetOutgoingAssemblies().Length > 0 )
+				{
+					retainedScriptAssembly = hotload.RetainedAssembly;
+					retryPackageMigration = batch.Length > 0;
+				}
+				log.Warning( e, "Package hotload was incomplete. The replacement packages are available." );
+			}
+			finally
+			{
+				hotload.RetainedAssembly = null;
 			}
 		}
-		finally
-		{
-			IncomingThisHotload.Clear();
-		}
-	}
-
-	void OnFullHotloadSuccess()
-	{
-		foreach ( var loadedAssembly in IncomingThisHotload )
-		{
-			TriggerRegisterEvent( loadedAssembly );
-		}
-
-		OnHotloadSuccess();
 	}
 
 	void OnHotloadSuccess()
 	{
-		OnAfterHotload?.Invoke();
+		try
+		{
+			OnAfterHotload?.Invoke();
+		}
+		catch ( Exception e ) when ( e is not OutOfMemoryException )
+		{
+			log.Warning( e, "Error notifying the game about the completed hotload." );
+		}
 	}
 
 	public Action OnAfterHotload { get; set; }

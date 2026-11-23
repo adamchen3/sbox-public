@@ -8,9 +8,9 @@ using static Sandbox.ResourceLibrary;
 
 namespace Sandbox;
 
-public class ResourceSystem
+public partial class ResourceSystem
 {
-	// Index of Json based, GameResources PrefabFile, DecalDefintions etc.
+	// Strong references to managed file resources, including uncompiled assets.
 	private Dictionary<int, Resource> ResourceIndex { get; } = new();
 	private Dictionary<ulong, Resource> ResourceIndexLong { get; } = new();
 	private Dictionary<Guid, Resource> GuidIndex { get; } = new();
@@ -154,12 +154,22 @@ public class ResourceSystem
 			Log.Info( $"Resource moved: {resource.ResourcePath} -> {newPath} ({resource.Guid})" );
 		}
 
+		var isStrong = ResourceIndexLong.GetValueOrDefault( resource.ResourceIdLong ) == resource;
 		Unregister( resource );
 
 		if ( resource is GameResource gr )
+		{
 			gr.Register( newPath );
+		}
+		else if ( isStrong )
+		{
+			resource.SetResourceIdentity( newPath );
+			Register( resource );
+		}
 		else
+		{
 			resource.RegisterWeakResourceId( newPath );
+		}
 	}
 
 	/// <summary>
@@ -170,7 +180,8 @@ public class ResourceSystem
 		if ( newGuid == Guid.Empty || newGuid == resource.Guid )
 			return;
 
-		if ( resource is GameResource )
+		var isStrong = resource is GameResource || ResourceIndexLong.GetValueOrDefault( resource.ResourceIdLong ) == resource;
+		if ( isStrong )
 		{
 			RemoveIndexed( GuidIndex, resource.Guid, resource );
 		}
@@ -192,7 +203,7 @@ public class ResourceSystem
 			Log.Error( $"GUID collision! ({newGuid}) incoming: {resource.ResourcePath}, existing: {existing.ResourcePath}" );
 		}
 
-		if ( resource is GameResource )
+		if ( isStrong )
 		{
 			GuidIndex[newGuid] = resource;
 		}
@@ -797,28 +808,48 @@ public static class ResourceLibrary
 	public static IEnumerable<T> GetAll<T>( string filepath, bool recursive = true ) where T : Resource => Game.Resources.GetAll<T>( filepath, recursive );
 
 	/// <summary>
-	/// Load a resource by its file path.
+	/// Load a resource by its file path. Abstract resource types resolve to the file's concrete type.
 	/// </summary>
 	public static async Task<T> LoadAsync<T>( string path ) where T : Resource
 	{
-		// try to load cached version first
+		// Validate source paths before cache lookup can normalize a nonexistent _c alias.
+		var type = typeof( T );
+		if ( Game.Resources.TryLoadUncompiledResource( type, path, FileSystem.Mounted, out var uncompiled ) )
+		{
+			return uncompiled as T;
+		}
+
+		path = Resource.FixPath( path );
 		if ( TryGet<T>( path, out var cached ) )
 			return cached;
 
+		// Mounts know their resource types. Disk resources use their file extension.
+		if ( type.IsAbstract && !Mounting.MountUtility.IsMountPath( path ) )
+		{
+			var resolvedType = ResolveResourceType( path );
+			if ( resolvedType is null || !resolvedType.IsAssignableTo( type ) ) return null;
+			type = resolvedType;
+		}
+
+		if ( type == typeof( Model ) )
+			return (T)(object)(await Sandbox.Model.LoadAsync( path ));
+
+		if ( type == typeof( Material ) )
+			return (T)(object)(await Sandbox.Material.LoadAsync( path ));
+
+		if ( Mounting.MountUtility.IsMountPath( path ) )
+		{
+			var mounted = await Mounting.Directory.TryLoadAsync( path );
+			if ( mounted is null || mounted is T )
+				return mounted as T;
+
+			Log.Warning( $"Mounted resource '{path}' is not a '{type.FullName}'." );
+			return null;
+		}
+
 		// Check if the type is a GameResource, and handle it accordingly
-		var type = typeof( T );
 		if ( type.IsAssignableTo( typeof( GameResource ) ) )
 		{
-			if ( Mounting.MountUtility.IsMountPath( path ) )
-			{
-				var mounted = await Mounting.Directory.TryLoadAsync( path );
-				if ( mounted is null || mounted is T )
-					return mounted as T;
-
-				Log.Warning( $"Mounted resource '{path}' is not a '{type.FullName}'." );
-				return null;
-			}
-
 			if ( type == typeof( PrefabFile ) )
 			{
 				return (T)(object)PrefabFile.Load( path );
@@ -828,22 +859,44 @@ public static class ResourceLibrary
 			return Get<T>( path );
 		}
 
-		if ( type == typeof( Model ) )
-		{
-			return (T)(object)(await Sandbox.Model.LoadAsync( path ));
-		}
-
-		if ( type == typeof( Material ) )
-		{
-			return (T)(object)(await Sandbox.Material.LoadAsync( path ));
-		}
-
 		if ( type == typeof( Shader ) )
 		{
 			return (T)(object)(Sandbox.Shader.Load( path ));
 		}
 
-		return default;
+		using var manifest = AsyncResourceLoader.Load( path );
+		if ( manifest is not null )
+			await manifest.WaitForLoad();
+
+		return Resource.LoadNative( type, path ) as T;
+	}
+
+	/// <summary>
+	/// Resolve native formats without editor services, then check declared game resource types.
+	/// </summary>
+	private static Type ResolveResourceType( string path )
+	{
+		var extension = System.IO.Path.GetExtension( path );
+		var nativeType = extension switch
+		{
+			".vmdl" => typeof( Model ),
+			".vmat" => typeof( Material ),
+			".vtex" => typeof( Texture ),
+			".vsnd" or ".wav" or ".mp3" or ".ogg" => typeof( SoundFile ),
+#pragma warning disable CS0618
+			".vanmgrph" => typeof( AnimationGraph ),
+#pragma warning restore CS0618
+			".ag" => typeof( Animation.Graph ),
+			".anim" => typeof( Animation.Clip ),
+			".skel" => typeof( Animation.Skeleton ),
+			".shader" => typeof( Shader ),
+			".vphys" => typeof( PhysicsGroupDescription ),
+			_ => null
+		};
+
+		if ( nativeType is not null ) return nativeType;
+
+		return Game.Resources.TryGetType( extension, out var attribute ) ? attribute.TargetType : null;
 	}
 
 	/// <summary>

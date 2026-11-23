@@ -86,6 +86,10 @@ public enum FindMode
 	EverythingInDescendants = Enabled | Disabled | InDescendants,
 }
 
+/// <summary>
+/// Provides access to a game object's components and methods to create and find them.
+/// </summary>
+[Expose]
 public class ComponentList
 {
 	readonly GameObject go;
@@ -217,7 +221,10 @@ public class ComponentList
 	/// </summary>
 	public IEnumerable<T> GetAll<T>( FindMode find = FindMode.InSelf | FindMode.Enabled | FindMode.InDescendants )
 	{
-		if ( go.IsDestroyed ) return Enumerable.Empty<T>();
+		if ( go.IsDestroyed
+			|| (find.Contains( FindMode.Enabled ) && !find.Contains( FindMode.Disabled ) && !go.Enabled)
+			|| (Count == 0 && go.Children.Count == 0 && (find & (FindMode.InParent | FindMode.InAncestors)) == 0) )
+			return Enumerable.Empty<T>();
 
 		var results = new List<T>( 16 );
 
@@ -225,6 +232,13 @@ public class ComponentList
 
 		return results;
 	}
+
+	/// <summary>
+	/// Find the same components as <see cref="GetAll{T}(FindMode)"/>, in the same order, without allocating a list.
+	/// They're found as you iterate, so don't add, remove or reparent components or GameObjects in the loop.
+	/// Use it with <c>foreach</c>: LINQ on it boxes the query and its enumerator, which costs more than <see cref="GetAll{T}(FindMode)"/>.
+	/// </summary>
+	internal ComponentQuery<T> Query<T>( FindMode find = FindMode.InSelf | FindMode.Enabled | FindMode.InDescendants ) => new( go, find );
 
 	/// <summary>
 	/// Append matching components to reusable engine-owned storage.
